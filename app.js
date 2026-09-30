@@ -19,7 +19,7 @@ const STATUS = [
   { v: 'cancel', t: '取消', sym: '✕', cls: 'cancel' },
 ];
 const ST = Object.fromEntries(STATUS.map(s => [s.v, s]));
-const PALETTE = ['#5A3D8A', '#2E7D8C', '#C0582B', '#3B7A3E', '#A63D6B', '#35609C', '#8C6D1F', '#1F7A6E', '#7A3FA0', '#B0402F', '#4F5D75', '#6B4E3D'];
+const PALETTE = ['#46607A', '#2E7D8C', '#C0582B', '#3B7A3E', '#A63D6B', '#35609C', '#8C6D1F', '#1F7A6E', '#7A3FA0', '#B0402F', '#4F5D75', '#6B4E3D'];
 const HOURS = [['ot', '加班'], ['comp', '補休'], ['personal', '事假'], ['sick', '病假'], ['annual', '特休']];
 const SIDE_NAME = { ours: '紫晶進度', client: '單位進度' };
 
@@ -61,7 +61,7 @@ function defaultConfig() {
   return {
     app: 'zijing-pm', version: 1, company: '紫晶設計',
     staff: [
-      { id: 'zhuang', name: '阿莊', prefix: '莊', color: '#5A3D8A', pin: '' },
+      { id: 'zhuang', name: '阿莊', prefix: '莊', color: '#46607A', pin: '' },
       { id: 'tong', name: '阿彤', prefix: '彤', color: '#2E7D8C', pin: '' },
     ],
     bossPin: '',
@@ -455,7 +455,7 @@ function dayStats(doc, date) {
 function autoText(p, m) { return `${p.name}｜${m.text.trim()}`; }
 
 /* ---------------- UI infrastructure ---------------- */
-const ICON_GEM = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10l4 6-9 12L3 9z" fill="#5A3D8A"/><path d="M3 9h18M7 3l5 18M17 3l-5 18M7 3l2.5 6M17 3l-2.5 6" stroke="#fff" stroke-width=".9" fill="none" opacity=".55"/></svg>';
+const ICON_GEM = '<svg class="logo" viewBox="0 0 397 433" aria-hidden="true"><g transform="translate(0,433) scale(0.1,-0.1)" fill="currentColor"><path d="M1892 4313 c-44 -19 -1728 -1428 -1798 -1505 -20 -22 -48 -66 -63 -97 l-26 -56 -3 -864 c-3 -994 -9 -927 87 -1021 l56 -55 865 -354 865 -355 86 -4 c58 -3 102 0 135 10 27 8 431 171 897 363 921 378 895 365 949 467 l23 43 0 885 0 885 -27 58 c-15 32 -38 71 -50 87 -30 37 -1754 1487 -1793 1507 -45 24 -151 27 -203 6z m702 -964 c322 -272 582 -497 578 -500 -4 -4 -263 -103 -575 -219 -543 -203 -571 -212 -625 -208 -42 4 -205 60 -612 212 -305 114 -558 211 -562 214 -7 7 1101 947 1160 985 15 9 32 15 38 13 7 -3 276 -226 598 -497z m-1424 -1092 l695 -261 120 0 120 0 714 267 c548 206 716 265 722 255 5 -7 9 -333 9 -724 0 -664 -1 -713 -17 -732 -11 -12 -320 -144 -767 -327 -679 -278 -753 -307 -793 -302 -57 6 -1512 602 -1535 629 -17 19 -18 68 -18 728 0 390 3 716 6 724 4 12 13 15 28 10 11 -4 334 -124 716 -267z"/></g></svg>';
 
 function toast(msg, err) {
   let box = $('.toasts');

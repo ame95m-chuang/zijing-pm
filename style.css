@@ -1,10 +1,11 @@
 :root{
-  --paper:#F2F0F5; --sheet:#FFFFFF; --ink:#231C2F; --ink2:#5F5770; --ink3:#8C859A;
-  --line:#DCD7E4; --line2:#ECE9F1; --wk:#F8F7FA;
-  --ame:#5A3D8A; --ame-deep:#3F2868; --ame-tint:#EEE8F7; --ame-soft:#D8CCEB;
+  --paper:#F1F3F5; --sheet:#FFFFFF; --ink:#1E2731; --ink2:#56606C; --ink3:#838C97;
+  --line:#D8DDE3; --line2:#EAEDF1; --wk:#F6F7F9;
+  /* 主色：灰藍（白字放在 --ame 上的對比為 6.5:1） */
+  --ame:#46607A; --ame-deep:#324659; --ame-tint:#E6ECF2; --ame-soft:#C5D1DD;
   --seal:#BF3A2E; --seal-tint:#FBEAE7;
   --ok:#2E7D5B; --ok-tint:#E2F2E9; --warn:#A8620E; --warn-tint:#FBEFD8;
-  --move:#34679E; --move-tint:#E3ECF7; --mute:#8A8494;
+  --move:#2A7473; --move-tint:#DDEFEE; --mute:#838C97;
   --serif:"Noto Serif TC","Songti TC","PMingLiU","MingLiU",serif;
   --sans:"Noto Sans TC","PingFang TC","Microsoft JhengHei","Heiti TC",system-ui,sans-serif;
   --r:6px;
@@ -56,7 +57,7 @@ label.chk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-siz
 /* ---------- top bar ---------- */
 .top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:18px;padding:0 20px;height:56px;background:var(--sheet);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);flex:none}
-.brand svg{width:22px;height:22px}
+.brand svg{width:22px;height:24px;color:var(--ink);flex:none}
 .brand-name{font-family:var(--serif);font-weight:700;font-size:18px;letter-spacing:.08em}
 .brand-sub{font-size:13px;color:var(--ink3);padding-left:8px;border-left:1px solid var(--line)}
 .who{display:flex;align-items:center;gap:8px;font-family:var(--serif);font-weight:700;font-size:17px;flex:none}
@@ -290,14 +291,14 @@ table.plain{width:100%;border-collapse:collapse;background:var(--sheet)}
 .task-in:focus{border-color:var(--ame)!important;background:#fff!important}
 .task-note{border:0!important;border-bottom:1px dashed var(--line)!important;border-radius:0!important;background:transparent!important;padding:2px 6px!important;font-size:13px!important;color:var(--ink2);width:100%;box-shadow:none!important}
 .task-note:focus{border-bottom-color:var(--ame)!important}
-.task-note::placeholder,.task-in::placeholder{color:#B3ADBF}
+.task-note::placeholder,.task-in::placeholder{color:#A9B1BB}
 .task .meta{font-size:12px;color:var(--ink3);padding-left:6px}
 .status{font-size:13px;padding:5px 8px;border-radius:14px;width:108px;cursor:pointer;font-weight:500}
 .st-none .status{color:var(--ink3)}
 .st-doing .status{background:var(--ame-tint);border-color:var(--ame-soft);color:var(--ame-deep)}
 .st-done .status{background:var(--ok-tint);border-color:#B5DCC6;color:var(--ok)}
 .st-delay .status{background:var(--warn-tint);border-color:#EBCB95;color:var(--warn)}
-.st-moved .status{background:var(--move-tint);border-color:#B9CDE6;color:var(--move)}
+.st-moved .status{background:var(--move-tint);border-color:#A9D3D0;color:var(--move)}
 .st-cancel .status{background:var(--line2);color:var(--mute)}
 .st-done .task-text,.st-done .task-in{color:var(--ink2)}
 .st-cancel .task-text,.st-cancel .task-in{text-decoration:line-through;color:var(--mute)}
@@ -323,7 +324,7 @@ table.wkt{width:100%;border-collapse:collapse;min-width:880px}
 .wkt tr.wk td{background:var(--wk)}
 .wkt tr.today td{background:var(--ame-tint)}
 .wkt tr.rowlink{cursor:pointer}
-.wkt tr.rowlink:hover td{background:#F4F0FA}
+.wkt tr.rowlink:hover td{background:#EEF2F6}
 .wkt .d{white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums;width:80px}
 .wkt .d small{display:block;font-weight:400;color:var(--seal);font-size:12px}
 .wkt tr.off .d{color:var(--seal)}
@@ -368,8 +369,8 @@ table.wkt{width:100%;border-collapse:collapse;min-width:880px}
 .gate p{color:var(--ink2);margin:0 0 18px;font-size:14px}
 .gate input{width:100%;font-size:18px;letter-spacing:.2em;padding:10px 12px;margin-bottom:12px}
 .gate .err{color:var(--seal);font-size:13px;min-height:20px}
-.modal-bg{position:fixed;inset:0;background:rgba(35,28,47,.38);z-index:100;display:grid;place-items:center;padding:16px}
-.modal{background:var(--sheet);border-radius:12px;width:min(520px,100%);max-height:calc(100vh - 32px);overflow:auto;box-shadow:0 20px 50px rgba(35,28,47,.25)}
+.modal-bg{position:fixed;inset:0;background:rgba(30,39,49,.38);z-index:100;display:grid;place-items:center;padding:16px}
+.modal{background:var(--sheet);border-radius:12px;width:min(520px,100%);max-height:calc(100vh - 32px);overflow:auto;box-shadow:0 20px 50px rgba(30,39,49,.25)}
 .modal-h{padding:18px 22px 6px;display:flex;align-items:center}
 .modal-h h2{font-size:20px;flex:1}
 .modal-b{padding:10px 22px}
