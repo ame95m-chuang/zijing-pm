@@ -7,7 +7,7 @@ window.ZJ_SETTINGS = {
   // 存放資料的 GitHub 倉庫，格式「帳號/倉庫名稱」。
   // 例如：dataRepo: 'zijing-design/zijing-data',
   // 留空 = 單機模式（資料只存在各自電腦，主管看不到別人的資料）。
-  dataRepo: '',
+  dataRepo: 'ame95m-chuang/zijing-data',
 
   // 資料放在倉庫裡的哪個資料夾（通常不用改）
   folder: 'data',
