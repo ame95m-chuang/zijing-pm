@@ -101,7 +101,7 @@ const S = {
   docs: {},              // sid -> {rev, data}
   fetchedAt: {},
   route: {},
-  ui: { showClosed: false, filters: {} },
+  ui: { showClosed: false, filters: {}, listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
   unlocked: JSON.parse(sessionStorage.getItem('zjpm.unlock') || '{}'),
 };
 const CFG = () => S.config.data;
@@ -122,6 +122,12 @@ function parseHolidays(text) {
 function refreshHolidays() { HOL = parseHolidays(CFG().holidays); }
 function isWeekend(s) { const w = dowOf(s); return w === 0 || w === 6; }
 function isOff(s) { const h = HOL[s]; if (h) return !h.work; return isWeekend(s); }
+/** a 之後（不含 a）到 b（含 b）之間的工作天數，扣除週末與國定假日，補班日算工作天 */
+function workdaysBetween(a, b) {
+  let n = 0, d = a, g = 0;
+  while (d < b && g++ < 800) { d = addDays(d, 1); if (!isOff(d)) n++; }
+  return n;
+}
 function prevWorkday(s, lim = 14) { let d = s; for (let i = 0; i < lim; i++) { d = addDays(d, -1); if (!isOff(d)) return d; } return addDays(s, -1); }
 function nextWorkday(s, lim = 14) { let d = s; for (let i = 0; i < lim; i++) { d = addDays(d, 1); if (!isOff(d)) return d; } return addDays(s, 1); }
 
@@ -609,6 +615,7 @@ function render(opts = {}) {
 function route(parts, q) {
   const [a, b, c, d] = parts;
   if (!a) { document.title = CFG().company + '｜專案管理'; return viewHome(); }
+  if (a === 'timeline') return viewTimeline(false, q);
   if (a === 'settings') { if (!bossOk()) return viewGate('boss', '#/settings'); document.title = '系統設定｜' + CFG().company; return viewSettings(); }
   if (a === 's') {
     const st = staffOf(b);
@@ -621,6 +628,7 @@ function route(parts, q) {
   if (a === 'boss') {
     if (!bossOk()) return viewGate('boss', location.hash);
     document.title = '主管檢視｜' + CFG().company;
+    if (b === 'timeline') return viewTimeline(true, q);
     if (b && staffOf(b) && S.docs[b]) return viewBossStaff(b, c || 'log', d, q);
     return viewBossBoard(q);
   }
@@ -641,9 +649,12 @@ function topbar(ctx) {
   } else if (ctx.mode === 'boss') {
     mid = `<div class="who boss">主管檢視</div>
       <nav class="tabs" aria-label="人員">
-        <a class="${!ctx.sid ? 'on' : ''}" href="#/boss">全員總覽</a>
+        <a class="${!ctx.sid && ctx.tab !== 'timeline' ? 'on' : ''}" href="#/boss">全員總覽</a>
+        <a class="${ctx.tab === 'timeline' ? 'on' : ''}" href="#/boss/timeline">全案時間表</a>
         ${CFG().staff.map(s => `<a class="${ctx.sid === s.id ? 'on' : ''}" href="#/boss/${s.id}">${esc(s.name)}</a>`).join('')}
       </nav>`;
+  } else if (ctx.mode === 'timeline') {
+    mid = `<div class="who">全案時間表</div>`;
   } else if (ctx.mode === 'settings') {
     mid = `<div class="who">系統設定</div>`;
   }
@@ -699,6 +710,7 @@ function viewHome() {
       <div class="staff-list">${cards || '<div class="empty">尚未建立人員，請到系統設定新增。</div>'}</div>
       <div class="home-foot">
         <a class="btn primary" href="#/boss">主管檢視</a>
+        <a class="btn" href="#/timeline">全案時間表</a>
         <a class="btn ghost" href="#/settings">系統設定</a>
         <span class="muted small" style="margin-left:auto">可填寫期間 ${esc(RANGE().start.replace(/-/g, '/'))} 至 ${esc(RANGE().end.replace(/-/g, '/'))}</span>
       </div>
@@ -759,7 +771,8 @@ function viewPlan(sid, sub, arg, q) {
   const isDesign = roleOf(sid) === 'design';
   const ownBlock = `<div class="side-head"><span>我的專案</span><span>${own.length}</span></div>
     <ul class="proj-list">${vis(own).map(item).join('') || (isDesign ? '<li class="side-empty">還沒有自己的專案</li>' : '')}</ul>
-    <button class="btn ${isDesign ? 'ghost' : ''}" data-act="newProject">＋ 新增專案</button>`;
+    <button class="btn ${isDesign ? 'ghost' : ''}" data-act="newProject">＋ 新增專案</button>
+    <button class="btn ghost" data-act="importPlan">＋ 匯入專案期程</button>`;
   const linkBlock = `<div class="side-head"><span>參與的專案</span><span>${linked.length}</span></div>
     ${linked.length ? `<ul class="proj-list">${vis(linked).map(item).join('')}</ul>` : '<p class="side-hint">選擇企劃編輯已建立的專案，期程會跟著企劃編輯的修改自動更新。</p>'}
     ${dangling ? `<p class="side-hint warn-text">有 ${dangling} 個參與的專案已被管理者刪除。<button class="link-btn" data-act="cleanLinks">清除</button></p>` : ''}
@@ -777,8 +790,8 @@ function viewPlan(sid, sub, arg, q) {
     main = p.link ? linkedProjectHTML(sid, p) : projectHTML(sid, p, q);
   } else {
     main = `<div class="empty"><h3>還沒有任何專案</h3>
-      <p>${isDesign ? '可以直接加入企劃編輯已建立的專案，期程會自動同步；' : '先新增一個專案，就能依日期填寫它的重要期程；'}<br>也可以自己新增專案，或到「系統設定」匯入原本專案管制表的內容。</p>
-      <div class="row" style="justify-content:center"><button class="btn primary" data-act="linkProjects">＋ 加入企劃編輯的專案</button><button class="btn" data-act="newProject">＋ 新增專案</button></div></div>`;
+      <p>${isDesign ? '可以直接加入企劃編輯已建立的專案，期程會自動同步；' : '先新增一個專案，就能依日期填寫它的重要期程；'}<br>也可以自己新增專案，或用「匯入專案期程」貼上整理好的期程。</p>
+      <div class="row" style="justify-content:center"><button class="btn primary" data-act="linkProjects">＋ 加入企劃編輯的專案</button><button class="btn" data-act="newProject">＋ 新增專案</button><button class="btn" data-act="importPlan">＋ 匯入專案期程</button></div></div>`;
   }
   return topbar({ mode: 'staff', sid, tab: 'plan' }) + `<main><div class="plan">${side}<section>${main}</section></div></main>`;
 }
@@ -868,7 +881,7 @@ function projectHTML(sid, p, q) {
   const stName = { active: '進行中', paused: '暫停', closed: '已結案' }[p.status || 'active'];
   const head = `<header class="proj-head" style="--c:${esc(p.color)}">
     <div class="proj-title"><span class="code">${esc(p.code || '')}</span><h2>${esc(p.name)}</h2><span class="st-badge ${p.status || 'active'}">${stName}</span></div>
-    <div class="row noprint"><button class="btn sm" data-act="editProject" data-pid="${p.id}">編輯專案</button><button class="btn sm" data-act="exportProject" data-pid="${p.id}">匯出 CSV</button></div>
+    <div class="row noprint"><button class="btn sm" data-act="editProject" data-pid="${p.id}">編輯專案</button><button class="btn sm" data-act="importPlan" data-pid="${p.id}">匯入期程</button><button class="btn sm" data-act="exportProject" data-pid="${p.id}">匯出 CSV</button></div>
     <div class="proj-meta">${p.client ? `<span>委託單位 <b>${esc(p.client)}</b></span>` : ''}<span>簡稱 <b>${esc(shortOf(p))}</b>${p.short ? '' : '（未設定，可在「編輯專案」填寫）'}</span><span>已填期程 <b>${ms.length}</b> 筆</span>
       ${next ? `<span>下一個期程 <b>${mdw(next.date)} ${esc(next.text.split('\n')[0])}</b></span>` : ''}${(() => { const ps = participantsOf(sid, p.id); return ps.length ? `<span>參與：<b>${esc(ps.map(x => x.name).join('、'))}</b>（修改期程會同步給他們）</span>` : ''; })()}${p.note ? `<span>${esc(p.note)}</span>` : ''}</div>
   </header>`;
@@ -1098,10 +1111,39 @@ function overviewHTML(sid, q, readOnly) {
     title = `${md(from)} 起 9 週`;
     prevD = addDays(from, -63); nextD = addDays(from, 63);
     const map = milestoneMap(doc, from, to, filter);
-    const days = Object.keys(map).sort();
-    body = days.length ? `<div class="agenda">${days.map(d => `<div class="ag-day ${isOff(d) ? 'off' : ''}"><div class="ag-date">${mdw(d)}${HOL[d] ? `<small>${esc(HOL[d].name)}</small>` : ''}${d.slice(0, 4) !== t.slice(0, 4) ? `<small class="muted" style="color:var(--ink3)">${d.slice(0, 4)}</small>` : ''}</div>
-      <div class="ag-items">${map[d].map(it => chipHTML(doc, it, d, sid, readOnly, 'full')).join('')}</div></div>`).join('')}</div>`
-      : `<div class="empty"><h3>這段期間沒有期程</h3><p>換個日期範圍，或檢查上方的篩選條件。</p></div>`;
+    const all = !!S.ui.listAll;
+    // 每個專案的期程日期（依目前篩選），用來計算「距上一個期程」的工作天數
+    const pm = Object.fromEntries(doc.projects.map(p => [p.id, p]));
+    const datesBy = {};
+    doc.milestones.forEach(m => { const p = pm[m.projectId]; if (p && (m.text || '').trim() && (!filter || filter(m, p))) (datesBy[p.id] = datesBy[p.id] || new Set()).add(m.date); });
+    Object.keys(datesBy).forEach(k => { datesBy[k] = Array.from(datesBy[k]).sort(); });
+    const gapTag = (pid, d) => {
+      const arr = datesBy[pid] || []; let prev = null;
+      for (const x of arr) { if (x < d) prev = x; else break; }
+      if (!prev) return '';
+      const n = workdaysBetween(prev, d);
+      return `<span class="gap" title="從 ${mdw(prev)} 的上一個期程算起（扣除週末與國定假日）">距上一個期程 <b>${n}</b> 個工作天</span>`;
+    };
+    const days = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) if (all || map[d]) days.push(d);
+    let lastMonth = '';
+    const rows = days.map(d => {
+      const head = d.slice(0, 7) !== lastMonth ? `<div class="ag-month">${d.slice(0, 4)} 年 ${+d.slice(5, 7)} 月</div>` : '';
+      lastMonth = d.slice(0, 7);
+      const items = map[d] || [];
+      const seen = new Set();
+      const body = items.length ? items.map(it => {
+        const chip = chipHTML(doc, it, d, sid, readOnly, 'full');
+        if (it.cont || seen.has(it.p.id)) return `<div class="ag-row">${chip}</div>`;
+        seen.add(it.p.id);
+        return `<div class="ag-row">${chip}${gapTag(it.p.id, d)}</div>`;
+      }).join('') : '<span class="ag-none">—</span>';
+      return `${head}<div class="ag-day ${isOff(d) ? 'off' : ''} ${items.length ? '' : 'blank'} ${d === t ? 'today' : ''}"><div class="ag-date">${mdw(d)}${HOL[d] ? `<small>${esc(HOL[d].name)}</small>` : ''}</div>
+      <div class="ag-items">${body}</div></div>`;
+    }).join('');
+    const toggle = `<label class="chk ag-toggle noprint"><input type="checkbox" data-ch="listAll" ${all ? 'checked' : ''}> 顯示每一天（包含沒有期程的日子）</label>`;
+    body = toggle + (days.length ? `<div class="agenda">${rows}</div>`
+      : `<div class="empty"><h3>這段期間沒有期程</h3><p>換個日期範圍、勾選「顯示每一天」，或檢查上方的篩選條件。</p></div>`);
   }
   const bar = `<div class="cal-bar">
     <div class="seg" role="tablist">${[['month', '月曆'], ['week', '週曆'], ['list', '清單']].map(([v, n]) => `<a role="tab" class="${view === v ? 'on' : ''}" href="${esc(link(v, anchor))}">${n}</a>`).join('')}</div>
@@ -1371,6 +1413,364 @@ function exportProjectCSV(sid, pid) {
 }
 
 /* =====================================================================
+ * 全案時間表：所有企劃編輯的專案並排在同一條時間軸上（唯讀）
+ * 路由：#/timeline（所有人）、#/boss/timeline（主管檢視）
+ * 參數：d=起始月份中的任一天、z=1|3|6（顯示幾個月）、who=人員 id、closed=1（含已結案）
+ * ===================================================================== */
+const TL_DW = { 1: 30, 3: 11, 6: 6 };           // 每一天的寬度（px）
+const TL_ROW = { head: 26, days: 24, dens: 30, group: 30, proj: 38 };
+
+function viewTimeline(isBoss, q) {
+  const t = todayStr();
+  const z = ['1', '3', '6'].includes(String(q.z)) ? +q.z : 3;
+  const start = monthStart(isDate(q.d) ? q.d : t);
+  const endEx = addMonths(start, z);
+  const who = q.who && staffOf(q.who) ? q.who : '';
+  const showClosed = q.closed === '1';
+  const base = isBoss ? '#/boss/timeline' : '#/timeline';
+  const link = o => {
+    const p = Object.assign({ d: start, z, who, closed: showClosed ? '1' : '' }, o);
+    return base + '?' + Object.entries(p).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  };
+
+  // 日期軸
+  const days = [];
+  for (let d = start; d < endEx; d = addDays(d, 1)) days.push(d);
+  const dw = TL_DW[z], W = days.length * dw;
+  const idx = d => Math.round((toDate(d) - toDate(start)) / 86400000);
+  const P = px => (px / W * 100).toFixed(4) + '%';   // 以百分比定位，畫面較寬時自動撐滿
+  const cx = d => idx(d) * dw + dw / 2;
+  const inView = d => d >= start && d < endEx;
+
+  // 專案（依負責人分組；參與者標在旁邊）
+  const groups = CFG().staff.map(o => {
+    if (!S.docs[o.id]) return null;
+    const projs = sortedProjects(D(o.id), true)
+      .filter(p => showClosed || p.status !== 'closed')
+      .map(p => ({ p, owner: o, parts: participantsOf(o.id, p.id), ms: D(o.id).milestones.filter(m => m.projectId === p.id && (m.text || '').trim()) }))
+      .filter(x => !who || x.owner.id === who || x.parts.some(s => s.id === who));
+    return projs.length ? { o, projs } : null;
+  }).filter(Boolean);
+
+  // 每週期程數（目前顯示的專案）
+  const perDay = {};
+  groups.forEach(g => g.projs.forEach(x => x.ms.forEach(m => { if (inView(m.date)) perDay[m.date] = (perDay[m.date] || 0) + 1; })));
+  const weeks = [];
+  for (let wk = mondayOf(start); wk < endEx; wk = addDays(wk, 7)) {
+    let n = 0; const a = wk < start ? start : wk; const bEx = addDays(wk, 7) < endEx ? addDays(wk, 7) : endEx;
+    for (let d = a; d < bEx; d = addDays(d, 1)) n += perDay[d] || 0;
+    weeks.push({ wk, left: idx(a) * dw, width: idx(bEx) * dw - idx(a) * dw, n });
+  }
+  const level = n => n === 0 ? 0 : n <= 2 ? 1 : n <= 5 ? 2 : n <= 8 ? 3 : 4;
+
+  // 右側：時間軸各列
+  const offLayer = days.map(d => isOff(d) ? `<i class="tl-off ${HOL[d] && !isWeekend(d) ? 'hol' : ''}" style="left:${P(idx(d) * dw)};width:${P(dw)}" title="${esc(mdw(d) + (HOL[d] ? ' ' + HOL[d].name : ''))}"></i>` : '').join('');
+  const todayLine = inView(t) ? `<i class="tl-today" style="left:${P(cx(t))}" title="今天 ${mdw(t)}"></i>` : '';
+  const months = [];
+  for (let m = start; m < endEx; m = addMonths(m, 1)) {
+    const a = idx(m), b = idx(addMonths(m, 1) < endEx ? addMonths(m, 1) : endEx);
+    months.push(`<div class="tl-mon" style="left:${P(a * dw)};width:${P((b - a) * dw)}">${(m === start || m.slice(5, 7) === '01') ? m.slice(0, 4) + ' 年 ' : ''}${+m.slice(5, 7)} 月</div>`);
+  }
+  const ticks = z === 1
+    ? days.map(d => `<span class="tl-tick ${isOff(d) ? 'off' : ''} ${d === t ? 'on' : ''}" style="left:${P(idx(d) * dw)};width:${P(dw)}">${+d.slice(8)}<small>${WEEK[dowOf(d)]}</small></span>`).join('')
+    : days.filter(d => dowOf(d) === 1).map(d => `<span class="tl-tick wk" style="left:${P(idx(d) * dw)}">${+d.slice(8)}</span>`).join('');
+  const dens = weeks.map(w => `<span class="tl-dens l${level(w.n)}" style="left:${P(w.left)};width:${P(w.width)}" title="${md(w.wk)} 這週：${w.n} 筆期程">${w.n || ''}</span>`).join('');
+
+  const projRow = x => {
+    const { p, ms } = x;
+    if (!ms.length) return `<div class="tl-row proj" style="height:${TL_ROW.proj}px"></div>`;
+    const dates = ms.map(m => m.date).concat(ms.filter(m => m.endDate).map(m => m.endDate)).sort();
+    const first = dates[0], last = dates[dates.length - 1];
+    let line = '';
+    if (last >= start && first < endEx) {
+      const a = first < start ? 0 : cx(first), b = last >= endEx ? W : cx(last);
+      line = `<i class="tl-line" style="left:${P(a)};width:${P(Math.max(0, b - a))};--c:${esc(p.color)}"></i>`;
+    }
+    const bars = ms.filter(m => m.endDate && m.endDate > m.date && m.endDate >= start && m.date < endEx).map(m => {
+      const a = m.date < start ? 0 : cx(m.date), b = m.endDate >= endEx ? W : cx(m.endDate);
+      return `<i class="tl-bar" style="left:${P(a)};width:${P(b - a)};--c:${esc(p.color)}"></i>`;
+    }).join('');
+    const byDate = {};
+    ms.filter(m => inView(m.date)).forEach(m => (byDate[m.date] = byDate[m.date] || []).push(m));
+    const dkeys = Object.keys(byDate).sort();
+    const dots = dkeys.map((d, i) => {
+      const arr = byDate[d].sort((a, b) => (a.side === 'ours' ? -1 : 1) - (b.side === 'ours' ? -1 : 1));
+      const allClient = arr.every(m => m.side === 'client');
+      const tent = arr.some(m => m.tentative);
+      const tip = `${shortOf(p)}｜${mdw(d)}\n` + arr.map(m => `${m.side === 'client' ? '［單位］' : ''}${m.text.trim().replace(/\n/g, '／')}${m.tentative ? '（待確認）' : ''}`).join('\n');
+      let label = '';
+      if (z === 1) {
+        const nx = dkeys[i + 1] ? cx(dkeys[i + 1]) : W;
+        const room = Math.min(nx - cx(d) - 14, 220);
+        if (room >= 28) label = `<span class="tl-lab" style="left:${P(cx(d) + 9)};max-width:${room}px">${esc(arr[0].text.trim().split('\n')[0])}</span>`;
+      }
+      return `<button class="tl-dot ${allClient ? 'client' : ''} ${tent ? 'tent' : ''}" style="left:${P(cx(d))};--c:${esc(p.color)}" data-act="tlDot" data-owner="${esc(x.owner.id)}" data-pid="${esc(p.id)}" data-date="${d}" title="${esc(tip)}" aria-label="${esc(tip)}">${arr.length > 1 ? `<b>${arr.length}</b>` : ''}</button>${label}`;
+    }).join('');
+    return `<div class="tl-row proj ${p.status === 'closed' ? 'closed' : ''}" style="height:${TL_ROW.proj}px">${line}${bars}${dots}</div>`;
+  };
+
+  let left = `<div class="tl-l head" style="height:${TL_ROW.head + TL_ROW.days}px">專案</div>
+    <div class="tl-l dens" style="height:${TL_ROW.dens}px" title="全公司每週的期程筆數，顏色越深代表越忙">每週期程數</div>`;
+  let right = `<div class="tl-row head" style="height:${TL_ROW.head}px">${months.join('')}</div>
+    <div class="tl-row days" style="height:${TL_ROW.days}px">${ticks}</div>
+    <div class="tl-row dens" style="height:${TL_ROW.dens}px">${dens}</div>`;
+  groups.forEach(g => {
+    left += `<div class="tl-l group" style="height:${TL_ROW.group}px"><span class="dot" style="--c:${esc(g.o.color)}"></span>${esc(g.o.name)}<small>${ROLE_NAME[roleOf(g.o.id)]}</small></div>`;
+    right += `<div class="tl-row group" style="height:${TL_ROW.group}px"></div>`;
+    g.projs.forEach(x => {
+      left += `<div class="tl-l proj ${x.p.status === 'closed' ? 'closed' : ''}" style="height:${TL_ROW.proj}px;--c:${esc(x.p.color)}" title="${esc(fullOf(x.p))}${x.parts.length ? '｜參與：' + esc(x.parts.map(s => s.name).join('、')) : ''}">
+        <b>${esc(shortOf(x.p))}</b>${x.parts.map(s => `<span class="who-mini" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</div>`;
+      right += projRow(x);
+    });
+  });
+
+  const zooms = [[1, '1 個月'], [3, '3 個月'], [6, '半年']];
+  const lastDay = addDays(endEx, -1);
+  const bar = `<div class="cal-bar noprint">
+    <div class="seg" role="tablist">${zooms.map(([v, n]) => `<a role="tab" class="${z === v ? 'on' : ''}" href="${esc(link({ z: v }))}">${n}</a>`).join('')}</div>
+    <div class="cal-nav"><a class="icon-btn" href="${esc(link({ d: addMonths(start, -z) }))}" aria-label="往前">‹</a><a class="btn sm" href="${esc(link({ d: t }))}">本月</a><a class="icon-btn" href="${esc(link({ d: addMonths(start, z) }))}" aria-label="往後">›</a>
+      <h3>${start.slice(0, 4)}/${+start.slice(5, 7)} – ${lastDay.slice(0, 4) !== start.slice(0, 4) ? lastDay.slice(0, 4) + '/' : ''}${+lastDay.slice(5, 7)} 月</h3></div>
+    <span class="grow"></span>
+    <select data-ch="tlWho" aria-label="篩選人員"><option value="">全部人員</option>${CFG().staff.map(s => `<option value="${esc(s.id)}" ${who === s.id ? 'selected' : ''}>${esc(s.name)}（負責或參與）</option>`).join('')}</select>
+    <label class="chk"><input type="checkbox" data-ch="tlClosed" ${showClosed ? 'checked' : ''}> 含已結案</label>
+    <button class="btn sm" data-act="print">列印</button>
+  </div>`;
+  const legend = `<div class="tl-legend"><span><i class="tl-dot-k"></i>紫晶進度</span><span><i class="tl-dot-k client"></i>單位進度</span><span><i class="tl-dot-k tent"></i>待確認</span>
+    <span><i class="tl-bar-k"></i>期間</span><span><i class="tl-off-k"></i>週末／國定假日</span><span><i class="tl-today-k"></i>今天</span>
+    <span class="muted">點一下圓點可看詳細內容${z === 1 ? '' : '；切換到「1 個月」可直接看到文字'}</span></div>`;
+
+  const body = groups.length
+    ? `<div class="tl"><div class="tl-left">${left}</div><div class="tl-right" id="tl-scroll"><div class="tl-canvas" style="min-width:${W}px">${offLayer}${todayLine}${right}</div></div></div>`
+    : `<div class="empty"><h3>沒有符合條件的專案</h3><p>${who ? '試著改選「全部人員」。' : '各企劃編輯建立專案後，就會出現在這裡。'}</p></div>`;
+  if (inView(t)) S.afterRender = () => { const sc = $('#tl-scroll'); if (sc && sc.scrollWidth > sc.clientWidth) sc.scrollLeft = Math.max(0, cx(t) - sc.clientWidth * 0.3); };
+  document.title = '全案時間表｜' + CFG().company;
+  return topbar(isBoss ? { mode: 'boss', tab: 'timeline' } : { mode: 'timeline' }) + `<main class="wide">
+    <div class="page-head"><div><h1>全案時間表</h1><p>公司所有專案的期程並排在同一條時間軸上，方便對照各案進度與忙碌的週次。這裡只能檢視，修改請到各專案頁面。</p></div></div>
+    ${bar}${legend}${body}</main>`;
+}
+
+function tlDetail(ownerSid, pid, date) {
+  const o = staffOf(ownerSid); if (!o || !S.docs[ownerSid]) return;
+  const p = byId(D(ownerSid).projects, pid); if (!p) return;
+  const ms = D(ownerSid).milestones.filter(m => m.projectId === pid && m.date === date && (m.text || '').trim())
+    .sort((a, b) => (a.side === 'ours' ? -1 : 1) - (b.side === 'ours' ? -1 : 1));
+  const parts = participantsOf(ownerSid, pid);
+  openModal({
+    title: `${shortOf(p)}｜${mdw(date)}`,
+    body: `<p class="muted small" style="margin:0 0 10px">${esc(fullOf(p))}　負責：${esc(o.name)}${parts.length ? '　參與：' + esc(parts.map(s => s.name).join('、')) : ''}</p>
+      <ul class="tl-detail">${ms.map(m => `<li><span class="tag ${m.side === 'client' ? 'client' : ''}">${SIDE_NAME[m.side]}</span>${m.tentative ? '<span class="tag tent">待確認</span>' : ''}${m.endDate ? `<span class="tag">至 ${mdw(m.endDate)}</span>` : ''}
+        <div style="white-space:pre-wrap;margin-top:4px">${esc(m.text.trim())}</div>${m.note ? `<div class="small muted">${esc(m.note)}</div>` : ''}</li>`).join('')}</ul>`,
+    actions: [{ label: '關閉', cls: 'primary', primary: true }],
+  });
+}
+
+function tlGo(changes) {
+  const base = S.route.parts[0] === 'boss' ? '#/boss/timeline' : '#/timeline';
+  const q = Object.assign({}, S.route.q, changes);
+  go(base + '?' + Object.entries(q).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'));
+}
+
+/* =====================================================================
+ * 匯入專案期程：① 專案匯入檔（JSON）② 直接貼上文字（逗號分隔或從 Excel 複製）
+ * ===================================================================== */
+
+/** 解析日期文字 → 'YYYY-MM-DD'；看不懂回傳 null。沒寫年份時依可填寫期間推算。 */
+function parseImportDate(raw) {
+  let s = String(raw || '').trim()
+    .replace(/[（(][^）)]*[）)]/g, '')          // 去掉「(四)」這類星期
+    .replace(/\s+\d{1,2}:\d{2}(:\d{2})?$/, '')  // 去掉 Excel 的時間
+    .replace(/\s+/g, '');
+  let y = 0, mo, d, m;
+  if ((m = s.match(/^(\d{4})[/\-.年](\d{1,2})[/\-.月](\d{1,2})日?$/))) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else if ((m = s.match(/^(\d{2,3})[/\-.年](\d{1,2})[/\-.月](\d{1,2})日?$/))) { y = +m[1] + 1911; mo = +m[2]; d = +m[3]; }  // 民國年
+  else if ((m = s.match(/^(\d{1,2})[/\-.月](\d{1,2})日?$/))) { mo = +m[1]; d = +m[2]; }
+  else return null;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const mk = yy => { const dt = new Date(yy, mo - 1, d); return dt.getMonth() === mo - 1 ? ymd(dt) : null; };
+  if (y) return mk(y);
+  const R = RANGE(), y0 = +R.start.slice(0, 4);
+  const cands = [mk(y0), mk(y0 + 1)].filter(Boolean);
+  return cands.find(x => x >= R.start && x <= R.end) || cands[0] || null;
+}
+
+/** 依分隔符號切成列與欄（支援 Excel 複製時帶引號的多行儲存格） */
+function splitTable(text, delim) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += ch;
+      continue;
+    }
+    if (ch === '"' && cell.trim() === '') { q = true; cell = ''; continue; }
+    if (ch === delim) { row.push(cell); cell = ''; continue; }
+    if (ch === '\r') continue;
+    if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; continue; }
+    cell += ch;
+  }
+  row.push(cell); rows.push(row);
+  return rows.map(r => r.map(c => c.replace(/\r/g, '').trim()));
+}
+
+/** 解析貼上的文字 → { rows:[{n,date,ours,client,err,raw}], blank, header } */
+function parsePaste(text) {
+  const t = String(text || '').replace(/\u00a0/g, ' ');
+  const delim = t.includes('\t') ? '\t' : t.includes(',') ? ',' : t.includes('，') ? '，' : '\t';
+  const table = splitTable(t, delim).map((cells, i) => ({ cells, n: i + 1 })).filter(r => r.cells.some(c => c));
+  let map = { date: 0, ours: 1, client: 2 }, header = false;
+  if (table.length) {
+    const first = table[0].cells, joined = first.join(' ');
+    if (!parseImportDate(first[0]) && /日期|紫晶|業主|單位|進度/.test(joined)) {
+      header = true;
+      if (first.length > 1) {
+        const find = re => first.findIndex(c => re.test(c));
+        const di = find(/日期/), oi = find(/紫晶/), ci = find(/單位|業主|客戶/);
+        if (di >= 0 && (oi >= 0 || ci >= 0)) map = { date: di, ours: oi, client: ci };
+      }
+    }
+  }
+  const data = header ? table.slice(1) : table;
+  if (!header && data.some(r => r.cells.length >= 5 && /^[（(]?(星期|週|周)?[一二三四五六日天][）)]?$/.test(r.cells[1] || ''))) map = { date: 0, ours: 3, client: 4 };  // 原專案管制表的五欄
+  const R = RANGE();
+  let blank = 0;
+  const rows = [];
+  data.forEach(r => {
+    const c = r.cells, get = i => (i >= 0 && i < c.length ? c[i] : '');
+    const ours = get(map.ours), client = get(map.client);
+    if (!ours && !client) { blank++; return; }
+    const date = parseImportDate(get(map.date));
+    let err = '';
+    if (!date) err = get(map.date) ? `看不懂日期「${get(map.date)}」` : '缺少日期';
+    else if (date < R.start || date > R.end) err = `${date.replace(/-/g, '/')} 超出可填寫期間`;
+    rows.push({ n: r.n, date, ours, client, err, raw: c.join(delim === '\t' ? ' ｜ ' : ', ') });
+  });
+  return { rows, blank, header };
+}
+
+function importDialog(sid, presetPid) {
+  const doc = D(sid);
+  const own = sortedProjects(doc, true).filter(p => !p.link);
+  const st = { json: null, jsonName: '' };
+  const usedColors = new Set(doc.projects.map(x => x.color));
+  const folder = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h4.2l2 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const sel = presetPid && own.some(p => p.id === presetPid) ? presetPid : (own[0] ? own[0].id : '');
+  const body = `<div class="imp">
+    <div class="imp-target" id="imp-target">
+      <div class="imp-label">匯入到</div>
+      <label class="imp-opt"><input type="radio" name="tgt" value="exist" ${own.length ? 'checked' : 'disabled'}> 既有專案
+        <select name="pid" ${own.length ? '' : 'disabled'}>${own.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(fullOf(p))}</option>`).join('') || '<option>（還沒有專案）</option>'}</select></label>
+      <label class="imp-opt"><input type="radio" name="tgt" value="new" ${own.length ? '' : 'checked'}> 新專案</label>
+      <div class="imp-new">
+        <label class="field" style="width:90px"><span>代號</span><input type="text" name="code" value="${esc(nextCode(sid))}" maxlength="12"></label>
+        <label class="field" style="flex:1"><span>專案名稱（必填）</span><input type="text" name="name" maxlength="60" placeholder="例如：土文館專刊"></label>
+        <label class="field" style="width:120px"><span>簡稱（2～4 字）</span><input type="text" name="short" maxlength="4" placeholder="例如：土文館"></label>
+      </div>
+    </div>
+    <label class="imp-drop" id="imp-drop">${folder}<span>選擇 JSON 檔案</span><small>專案匯入檔，可一次匯入多個專案</small><input type="file" accept=".json,application/json" hidden></label>
+    <div class="imp-or"><span>或貼上文字</span></div>
+    <textarea class="imp-text" name="paste" rows="6" spellcheck="false" placeholder="日期, 紫晶, 業主&#10;10/01, 1校提供,&#10;10/05, , 回復校稿&#10;10/20, 2校提供, 回復2校修改&#10;&#10;也可以直接從 Excel 複製「日期／紫晶進度／單位進度」幾欄貼上"></textarea>
+    <div class="imp-preview" id="imp-preview" aria-live="polite"></div>
+  </div>`;
+
+  const targetInfo = bg => {
+    const tgt = (bg.querySelector('[name=tgt]:checked') || {}).value;
+    return tgt === 'exist' ? { pid: bg.querySelector('[name=pid]').value } : { pid: null };
+  };
+  const paint = bg => {
+    const box = bg.querySelector('#imp-preview');
+    const isNew = (bg.querySelector('[name=tgt]:checked') || {}).value === 'new';
+    bg.querySelector('.imp-new').classList.toggle('on', isNew);
+    bg.querySelector('[name=pid]').disabled = isNew || !own.length;
+    if (st.json) {
+      const exists = new Set(doc.projects.map(p => p.code));
+      const items = st.json.map(x => `<li class="${exists.has(x.code) ? 'skip' : ''}"><b>${esc(x.code)}</b> ${esc(x.name)}${x.short ? `（${esc(x.short)}）` : ''}<span class="muted">　${x.ms.length} 筆期程${exists.has(x.code) ? '・已存在，略過' : ''}</span></li>`).join('');
+      const nNew = st.json.filter(x => !exists.has(x.code)).length;
+      box.innerHTML = `<div class="imp-sum">已選擇檔案 <b>${esc(st.jsonName)}</b>：將建立 <b>${nNew}</b> 個新專案 <button type="button" class="link-btn" data-clear>改用貼上文字</button></div><ul class="imp-json">${items}</ul>`;
+      bg.querySelector('#imp-target').classList.add('dim');
+      bg.querySelector('.imp-text').disabled = true;
+      box.querySelector('[data-clear]').onclick = () => { st.json = null; bg.querySelector('#imp-target').classList.remove('dim'); bg.querySelector('.imp-text').disabled = false; paint(bg); };
+      return;
+    }
+    const text = bg.querySelector('.imp-text').value;
+    if (!text.trim()) { box.innerHTML = '<p class="muted small" style="margin:0">貼上文字後，這裡會顯示預覽。</p>'; return; }
+    const P = parsePaste(text);
+    const { pid } = targetInfo(bg);
+    let nOurs = 0, nClient = 0;
+    const rowsHTML = P.rows.slice(0, 400).map(r => {
+      let note = r.err;
+      if (!r.err) {
+        const notes = [];
+        [['ours', r.ours], ['client', r.client]].forEach(([side, txt]) => {
+          if (!txt) return;
+          side === 'ours' ? nOurs++ : nClient++;
+          const ex = pid ? findCell(doc, pid, r.date, side) : null;
+          if (ex && (ex.text || '').trim()) notes.push(ex.text.trim() === txt ? `${SIDE_NAME[side]}內容相同，略過` : `${SIDE_NAME[side]}已有內容，會接在後面`);
+        });
+        note = notes.join('；') || '新增';
+      }
+      return `<tr class="${r.err ? 'err' : ''}"><td class="nowrap">${r.date ? mdw(r.date) + (r.date.slice(0, 4) !== todayStr().slice(0, 4) ? `<small class="muted"> ${r.date.slice(0, 4)}</small>` : '') : '—'}</td><td>${esc(r.ours)}</td><td>${esc(r.client)}</td><td class="st">${r.err ? `第 ${r.n} 行：${esc(note)}` : esc(note)}</td></tr>`;
+    }).join('');
+    const bad = P.rows.filter(r => r.err).length, good = P.rows.length - bad;
+    box.innerHTML = `<div class="imp-sum">可匯入 <b>${good}</b> 行（紫晶進度 ${nOurs} 筆、單位進度 ${nClient} 筆）${P.blank ? `・空白 ${P.blank} 行略過` : ''}${bad ? `・<span class="bad">有問題 ${bad} 行，不會匯入</span>` : ''}${P.header ? '・已略過標題行' : ''}</div>
+      ${P.rows.length ? `<div class="imp-table"><table class="plain"><thead><tr><th>日期</th><th>紫晶進度</th><th>單位進度</th><th>狀態</th></tr></thead><tbody>${rowsHTML}</tbody></table></div>` : ''}`;
+  };
+
+  const doImport = bg => {
+    if (st.json) { importSeed(sid, st.json); render({ keepScroll: true }); return true; }
+    const P = parsePaste(bg.querySelector('.imp-text').value);
+    const rows = P.rows.filter(r => !r.err);
+    if (!rows.length) { toast(P.rows.length ? '沒有可以匯入的資料，請檢查標紅的行' : '請選擇 JSON 檔案或貼上文字', true); return false; }
+    let { pid } = targetInfo(bg), p;
+    const f = n => bg.querySelector(`[name=${n}]`);
+    if (!pid) {
+      const name = f('name').value.trim();
+      if (!name) { f('name').focus(); f('name').style.borderColor = 'var(--seal)'; toast('請填寫新專案的名稱', true); return false; }
+      const short = f('short').value.trim();
+      if (short && Array.from(short).length < 2) { f('short').focus(); f('short').style.borderColor = 'var(--seal)'; toast('簡稱請填 2～4 個字', true); return false; }
+      const color = PALETTE.find(c => !usedColors.has(c)) || PALETTE[doc.projects.length % PALETTE.length];
+      p = { id: uid(), code: f('code').value.trim(), name, short, client: '', color, status: 'active', note: '', created: now(), u: now() };
+      doc.projects.push(p); pid = p.id;
+    } else p = byId(doc.projects, pid);
+    let added = 0, appended = 0, same = 0;
+    rows.forEach(r => [['ours', r.ours], ['client', r.client]].forEach(([side, txt]) => {
+      if (!txt) return;
+      const ex = findCell(doc, pid, r.date, side);
+      if (ex && (ex.text || '').trim()) {
+        if (ex.text.trim() === txt) { same++; return; }
+        ex.text = ex.text.replace(/\s+$/, '') + '\n' + txt; ex.u = now(); appended++; return;
+      }
+      if (ex) { ex.text = txt; ex.u = now(); added++; return; }
+      doc.milestones.push({ id: uid(), projectId: pid, date: r.date, side, text: txt, endDate: '', tentative: false, note: '', u: now() }); added++;
+    }));
+    touchStaff(sid);
+    toast(`已匯入到「${shortOf(p)}」：新增 ${added} 筆${appended ? `、接在原內容後 ${appended} 筆` : ''}${same ? `、相同略過 ${same} 筆` : ''}`);
+    const firstDate = rows.map(r => r.date).sort()[0];
+    go(`#/s/${sid}/plan/p/${pid}?m=${firstDate.slice(0, 7)}`);
+    return true;
+  };
+
+  openModal({
+    title: '匯入專案期程', wide: true, body,
+    actions: [{ label: '取消', cancel: true }, { label: '確認匯入', cls: 'primary', primary: true, onClick: doImport }],
+    onOpen: bg => {
+      let tm = null;
+      bg.querySelector('.imp-text').addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => paint(bg), 150); });
+      bg.querySelectorAll('[name=tgt],[name=pid]').forEach(el => el.addEventListener('change', () => paint(bg)));
+      const file = bg.querySelector('#imp-drop input');
+      file.addEventListener('change', async () => {
+        const fl = file.files[0]; file.value = ''; if (!fl) return;
+        let b = null; try { b = JSON.parse(await fl.text()); } catch (e) { b = null; }
+        const list = b && b.app === 'zijing-pm' && b.type === 'projects' && Array.isArray(b.projects) ? b.projects.filter(x => x && x.code && Array.isArray(x.ms)) : null;
+        if (!list || !list.length) { toast('這不是專案匯入檔（JSON）', true); return; }
+        st.json = list; st.jsonName = fl.name; paint(bg);
+      });
+      paint(bg);
+    },
+  });
+}
+
+/* =====================================================================
  * 主管檢視
  * ===================================================================== */
 function symLi(st, html) { const s = ST[st || '']; return `<li><span class="sym ${s.cls}" title="${s.t}">${s.sym}</span><span>${html}</span></li>`; }
@@ -1393,16 +1793,25 @@ function viewBossBoard(q) {
     </article>`;
   }).join('');
 
-  // 未來兩週全員重要期程
+  // 未來兩週全員重要期程：參與專案的同一筆期程合併成一行（負責的企劃編輯在前）
   const to = addDays(date, 13);
-  const merged = {};
+  const merged = {};   // 日期 -> Map(期程id -> { m, p, owner, people })
+  const order = id => CFG().staff.findIndex(s => s.id === id);
   CFG().staff.forEach(st => {
     const map = milestoneMap(V(st.id), date, to, (m, p) => p.status !== 'closed');
-    Object.entries(map).forEach(([d, arr]) => arr.forEach(it => { if (!it.cont) (merged[d] = merged[d] || []).push(Object.assign({ st }, it)); }));
+    Object.entries(map).forEach(([d, arr]) => arr.forEach(it => {
+      if (it.cont) return;
+      const day = merged[d] = merged[d] || new Map();
+      let g = day.get(it.m.id);
+      if (!g) { g = { m: it.m, p: it.p, owner: it.p.link ? it.p.link.sid : st.id, people: [] }; day.set(it.m.id, g); }
+      if (!it.p.link) { g.owner = st.id; g.p = it.p; }
+      if (!g.people.some(x => x.id === st.id)) g.people.push(st);
+    }));
   });
+  Object.values(merged).forEach(day => day.forEach(g => g.people.sort((x, y) => (x.id === g.owner ? -1 : y.id === g.owner ? 1 : order(x.id) - order(y.id)))));
   const days = Object.keys(merged).sort();
   const upcoming = days.length ? `<div class="agenda">${days.map(d => `<div class="ag-day ${isOff(d) ? 'off' : ''}"><div class="ag-date">${mdw(d)}${HOL[d] ? `<small>${esc(HOL[d].name)}</small>` : ''}</div>
-    <ul class="ag-items" style="margin:0">${merged[d].map(({ st, m, p }) => `<li class="row" style="gap:8px;flex-wrap:nowrap;align-items:baseline"><span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span><span><b style="color:${esc(p.color)}" title="${esc(fullOf(p))}">${esc(shortOf(p))}</b>｜${esc(m.text.trim().replace(/\n/g, '／'))}${m.side === 'client' ? ' <span class="tag client">單位</span>' : ''}${m.tentative ? ' <span class="tag tent">待確認</span>' : ''}${m.endDate ? ` <span class="tag">至 ${md(m.endDate)}</span>` : ''}</span></li>`).join('')}</ul></div>`).join('')}</div>`
+    <ul class="ag-items" style="margin:0">${Array.from(merged[d].values()).map(({ m, p, people }) => `<li class="row" style="gap:8px;flex-wrap:nowrap;align-items:baseline"><span class="who-tags">${people.map(st => `<span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span>`).join('')}</span><span><b style="color:${esc(p.color)}" title="${esc(fullOf(p))}">${esc(shortOf(p))}</b>｜${esc(m.text.trim().replace(/\n/g, '／'))}${m.side === 'client' ? ' <span class="tag client">單位</span>' : ''}${m.tentative ? ' <span class="tag tent">待確認</span>' : ''}${m.endDate ? ` <span class="tag">至 ${md(m.endDate)}</span>` : ''}</span></li>`).join('')}</ul></div>`).join('')}</div>`
     : '<div class="empty"><p>未來兩週沒有專案期程。</p></div>';
 
   return topbar({ mode: 'boss' }) + `<main>
@@ -1437,7 +1846,6 @@ function viewSettings() {
     <input type="color" data-f="color" value="${esc(s.color)}" aria-label="代表色">
     <input type="text" data-f="pin" value="${esc(s.pin || '')}" aria-label="個人密碼" placeholder="不設密碼">
     <button class="btn sm danger" data-act="delStaff" data-i="${i}">移除</button></div>`).join('');
-  const staffOpts = CFG().staff.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   const modeText = Store.mode === 'server' ? `共用模式：資料存於 GitHub 倉庫 ${esc(SETTINGS.dataRepo)} 的 ${esc(SETTINGS.folder || '（根目錄）')} 資料夾，所有人共用。` : '單機模式：資料只存在這台電腦的瀏覽器。';
   return topbar({ mode: 'settings' }) + `<main class="settings">
     <div class="page-head"><div><h1>系統設定</h1><p>修改後請按最下方的「儲存設定」。</p></div></div>
@@ -1458,9 +1866,6 @@ function viewSettings() {
     <div class="row" style="position:sticky;bottom:12px;z-index:5;background:var(--paper);padding:10px 0;margin-bottom:26px">
       <button class="btn primary" data-act="saveSettings">儲存設定</button><button class="btn ghost" data-act="cancelSettings">放棄修改</button></div>
 
-    <section class="set-sec"><h2>匯入專案檔</h2><p>選擇人員後，匯入「專案匯入檔（.json）」中的專案與期程（例如由原本專案管制表轉出的莊01–莊08）。已存在相同代號的專案會略過，可以放心重複執行。</p>
-      <div class="row"><select id="seed-to" aria-label="匯入到">${staffOpts}</select><button class="btn" data-act="importSeed">選擇檔案並匯入</button>
-      <input type="file" id="seed-file" accept=".json,application/json" hidden></div></section>
     <section class="set-sec"><h2>資料備份</h2><p>建議每月下載一次完整備份。還原會以備份檔覆蓋目前所有資料。${Store.mode === 'local' ? '單機模式下，也可以用備份檔把資料搬到另一台電腦。' : ''}</p>
       <div class="row"><button class="btn" data-act="exportBackup">下載完整備份</button><button class="btn" data-act="importBackup">從備份檔還原</button>
       <input type="file" id="backup-file" accept=".json,application/json" hidden></div></section>
@@ -1487,9 +1892,11 @@ function harvestSettings() {
 function importSeed(sid, SEED) {
   const doc = D(sid);
   let np = 0, nm = 0;
+  const used = new Set(doc.projects.map(p => p.color));
   SEED.forEach((sp, i) => {
     if (doc.projects.some(p => p.code === sp.code)) return;
-    const p = { id: uid(), code: sp.code, name: sp.name, short: String(sp.short || '').trim().slice(0, 4), client: '', color: PALETTE[i % PALETTE.length], status: 'active', note: '由專案管制表匯入', created: now() + i, u: now() };
+    const color = PALETTE.find(c => !used.has(c)) || PALETTE[(doc.projects.length) % PALETTE.length]; used.add(color);
+    const p = { id: uid(), code: sp.code, name: sp.name, short: String(sp.short || '').trim().slice(0, 4), client: '', color, status: 'active', note: '由專案匯入檔匯入', created: now() + i, u: now() };
     doc.projects.push(p); np++;
     sp.ms.forEach(([date, side, text, note]) => {
       const ex = findCell(doc, p.id, date, side);
@@ -1510,6 +1917,8 @@ const ACT = {
   newProject: () => projectDialog(ctxSid()),
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
+  importPlan: el => importDialog(ctxSid(), el.dataset.pid),
+  tlDot: el => tlDetail(el.dataset.owner, el.dataset.pid, el.dataset.date),
   unlinkProject: el => unlinkProject(ctxSid(), el.dataset.lid),
   cleanLinks: () => {
     const sid = ctxSid(); const doc = D(sid); const bad = new Set(danglingLinks(sid).map(l => l.id));
@@ -1570,19 +1979,6 @@ const ACT = {
     const newIds = CFG().staff.map(s => s.id).filter(id => !S.docs[id]);
     try { await loadStaffDocs(newIds); } catch (e) { newIds.forEach(id => { S.docs[id] = { rev: 0, data: emptyStaff() }; }); }
     touchConfig(); S.setDraft = null; toast('設定已儲存'); location.hash = '#/';
-  },
-  importSeed: () => {
-    const sid = $('#seed-to').value; const st = staffOf(sid);
-    const inp = $('#seed-file');
-    inp.onchange = async () => {
-      const f = inp.files[0]; inp.value = ''; if (!f) return;
-      let b; try { b = JSON.parse(await f.text()); } catch (e) { b = null; }
-      const list = b && b.app === 'zijing-pm' && b.type === 'projects' && Array.isArray(b.projects) ? b.projects.filter(x => x && x.code && Array.isArray(x.ms)) : null;
-      if (!list) { toast('這不是專案匯入檔', true); return; }
-      if (!(await confirmBox('匯入專案', `要把 ${list.map(x => x.code).join('、')} 共 ${list.length} 個專案匯入到「${st.name}」嗎？`, '匯入'))) return;
-      importSeed(sid, list);
-    };
-    inp.click();
   },
   forgetToken: async () => {
     if (!(await confirmBox('清除存取權杖', '清除後，這台電腦需要重新輸入權杖才能使用。適合在公用電腦使用完畢時執行。', '清除', true))) return;
@@ -1656,6 +2052,9 @@ const CH = {
     } else if (m) box.classList.add('filled');
   },
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
+  tlWho: el => tlGo({ who: el.value }),
+  tlClosed: el => tlGo({ closed: el.checked ? '1' : '' }),
+  listAll: el => { S.ui.listAll = el.checked; try { localStorage.setItem('zjpm.listAll', el.checked ? '1' : ''); } catch (e) {} render({ keepScroll: true }); },
   calSide: el => { calFilter(el.dataset.sid).side = el.value; render({ keepScroll: true }); },
   calTasks: el => { calFilter(el.dataset.sid).tasks = el.checked; render({ keepScroll: true }); },
   logJump: el => {
