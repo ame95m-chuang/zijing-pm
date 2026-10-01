@@ -629,6 +629,7 @@ function route(parts, q) {
     if (!bossOk()) return viewGate('boss', location.hash);
     document.title = '主管檢視｜' + CFG().company;
     if (b === 'timeline') return viewTimeline(true, q);
+    if (b === 'attendance') return viewBossAttendance(q);
     if (b && staffOf(b) && S.docs[b]) return viewBossStaff(b, c || 'log', d, q);
     return viewBossBoard(q);
   }
@@ -649,8 +650,9 @@ function topbar(ctx) {
   } else if (ctx.mode === 'boss') {
     mid = `<div class="who boss">主管檢視</div>
       <nav class="tabs" aria-label="人員">
-        <a class="${!ctx.sid && ctx.tab !== 'timeline' ? 'on' : ''}" href="#/boss">全員總覽</a>
+        <a class="${!ctx.sid && !ctx.tab ? 'on' : ''}" href="#/boss">全員總覽</a>
         <a class="${ctx.tab === 'timeline' ? 'on' : ''}" href="#/boss/timeline">全案時間表</a>
+        <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
         ${CFG().staff.map(s => `<a class="${ctx.sid === s.id ? 'on' : ''}" href="#/boss/${s.id}">${esc(s.name)}</a>`).join('')}
       </nav>`;
   } else if (ctx.mode === 'timeline') {
@@ -1049,7 +1051,7 @@ function milestoneDialog(sid, opts) {
 }
 
 /* =====================================================================
- * 綜合檢視（週曆／月曆／清單）— 專員與主管共用
+ * 綜合檢視（週曆／月曆／清單）— 同仁與主管共用
  * ===================================================================== */
 function calFilter(sid) {
   if (!S.ui.filters[sid]) S.ui.filters[sid] = { side: 'all', hidden: {}, tasks: true };
@@ -1156,7 +1158,7 @@ function overviewHTML(sid, q, readOnly) {
   const legend = showProj.length ? `<div class="legend">${showProj.map(p => `<button class="${F.hidden[p.id] ? 'off' : ''}" style="--c:${esc(p.color)}" data-act="calToggle" data-sid="${sid}" data-pid="${p.id}" aria-pressed="${!F.hidden[p.id]}" title="${esc(fullOf(p))}（點一下可隱藏／顯示）">${esc(shortOf(p))}</button>`).join('')}
     <span class="key"><i style="background:var(--ame-tint);border-left:3px solid var(--ame)"></i>紫晶進度</span><span class="key"><i style="border:1px solid var(--ame-soft);border-left:3px solid var(--ame)"></i>單位進度</span><span class="key"><i style="border:1px dashed var(--ame-soft)"></i>待確認</span></div>` : '';
   const head = readOnly ? '' : `<div class="page-head"><div><h1>綜合檢視</h1><p>所有專案的期程集中在同一張行事曆。點選期程可跳到該專案編輯。</p></div></div>`;
-  const empty = !doc.projects.length ? `<div class="notice info">${readOnly ? '這位專員還沒有建立專案。' : '還沒有專案。先在左側新增專案並填寫期程，這裡就會自動彙整。'}</div>` : '';
+  const empty = !doc.projects.length ? `<div class="notice info">${readOnly ? '這位同仁還沒有建立專案。' : '還沒有專案。先在左側新增專案並填寫期程，這裡就會自動彙整。'}</div>` : '';
   return head + empty + bar + legend + body;
 }
 function chipHTML(doc, it, d, sid, readOnly, size) {
@@ -1200,7 +1202,7 @@ function viewStaffLog(sid, d, q) {
 function logBar(sid, date, v, isBoss) {
   const doc = V(sid); const R = RANGE();
   const ws = mondayOf(date); const t = todayStr();
-  // 專員預設單日、主管預設一週總表
+  // 同仁預設單日、主管預設一週總表
   const link = (d, view) => isBoss ? `#/boss/${sid}/log/${d}${view === 'day' ? '?v=day' : ''}` : `#/s/${sid}/log/${d}${view === 'week' ? '?v=week' : ''}`;
   let strip = '';
   for (let i = 0; i < 7; i++) {
@@ -1307,7 +1309,7 @@ function dayHTML(sid, date, readOnly) {
 }
 function bossBoxHTML(sid, date, boss) {
   boss = boss || {};
-  return `<section class="blk boss-note bossbox noprint"><div class="blk-h"><h3>主管回饋</h3><span class="sub">專員會在自己的工作日誌看到</span></div>
+  return `<section class="blk boss-note bossbox noprint"><div class="blk-h"><h3>主管回饋</h3><span class="sub">同仁會在自己的工作日誌看到</span></div>
     <textarea data-in="bossComment" data-sid="${sid}" data-date="${date}" placeholder="給 ${esc(staffOf(sid).name)} 的回饋或提醒">${esc(boss.comment || '')}</textarea>
     <div class="row" style="margin-top:8px"><label class="chk"><input type="checkbox" data-ch="bossReviewed" data-sid="${sid}" data-date="${date}" ${boss.reviewed ? 'checked' : ''}> 已閱</label>
     ${boss.at ? `<span class="muted small">最後更新 ${new Date(boss.at).toLocaleString('zh-TW', { hour12: false })}</span>` : ''}</div></section>`;
@@ -1771,6 +1773,96 @@ function importDialog(sid, presetPid) {
 }
 
 /* =====================================================================
+ * 主管檢視：出缺勤月報（依月份統計加班、補休、事假、病假、特休）
+ * 路由：#/boss/attendance?m=YYYY-MM
+ * 資料來源：各同仁工作日誌中的「出勤時數」
+ * ===================================================================== */
+const HOUR_ABBR = { ot: '加', comp: '補', personal: '事', sick: '病', annual: '特' };
+
+/** 這天的日誌有沒有填寫任何內容 */
+function logFilled(L) {
+  if (!L) return false;
+  return (L.tasks || []).some(t => (t.text || '').trim()) ||
+    Object.values(L.auto || {}).some(a => a && (a.status || (a.note || '').trim())) ||
+    HOURS.some(([k]) => num((L.hours || {})[k])) || !!(L.remark || '').trim();
+}
+const fmtH = n => (Math.round(n * 100) / 100).toString();
+
+function attendanceData(month) {
+  const from = month + '-01', to = monthEnd(from), t = todayStr();
+  const days = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
+  const rows = CFG().staff.filter(s => S.docs[s.id]).map(st => {
+    const logs = D(st.id).logs || {};
+    const sum = Object.fromEntries(HOURS.map(([k]) => [k, 0]));
+    let filled = 0, workdays = 0;
+    const cells = days.map(d => {
+      const L = logs[d];
+      const h = {};
+      HOURS.forEach(([k]) => { const v = num(L && L.hours && L.hours[k]); if (v) { h[k] = v; sum[k] += v; } });
+      const off = isOff(d), past = d <= t, f = logFilled(L);
+      if (!off && past) { workdays++; if (f) filled++; }
+      return { d, h, off, past, filled: f };
+    });
+    return { st, sum, filled, workdays, cells };
+  });
+  return { from, to, days, rows };
+}
+
+function viewBossAttendance(q) {
+  const t = todayStr();
+  const month = /^\d{4}-\d{2}$/.test(q.m || '') ? q.m : t.slice(0, 7);
+  const A = attendanceData(month);
+  const prevM = addMonths(month + '-01', -1).slice(0, 7), nextM = addMonths(month + '-01', 1).slice(0, 7);
+  const total = Object.fromEntries(HOURS.map(([k]) => [k, A.rows.reduce((n, r) => n + r.sum[k], 0)]));
+  const val = n => n ? `<b>${fmtH(n)}</b><small> 小時</small>` : '<span class="muted">—</span>';
+
+  const summary = `<div class="grid-wrap"><table class="plain att-sum">
+    <thead><tr><th>同仁</th>${HOURS.map(([, n]) => `<th class="num">${n}</th>`).join('')}<th class="num">日誌填寫</th></tr></thead>
+    <tbody>${A.rows.map(r => `<tr><td><span class="who-tag" style="--c:${esc(r.st.color)}">${esc(r.st.name)}</span></td>
+      ${HOURS.map(([k]) => `<td class="num ${k}">${val(r.sum[k])}</td>`).join('')}
+      <td class="num">${r.workdays ? `${r.filled}／${r.workdays} 個工作天${r.filled < r.workdays ? `<div class="small warn-text">${r.workdays - r.filled} 天未填</div>` : ''}` : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody>
+    ${A.rows.length > 1 ? `<tfoot><tr><th>合計</th>${HOURS.map(([k]) => `<th class="num">${total[k] ? fmtH(total[k]) + ' 小時' : '—'}</th>`).join('')}<th></th></tr></tfoot>` : ''}
+  </table></div>`;
+
+  const head = A.days.map(d => `<th class="${isOff(d) ? 'off' : ''} ${d === t ? 'today' : ''}" title="${esc(mdw(d) + (HOL[d] ? ' ' + HOL[d].name : ''))}">${+d.slice(8)}<small>${WEEK[dowOf(d)]}</small></th>`).join('');
+  const body = A.rows.map(r => `<tr><th class="who"><span class="who-tag" style="--c:${esc(r.st.color)}">${esc(r.st.name)}</span></th>${r.cells.map(c => {
+    const items = HOURS.filter(([k]) => c.h[k]).map(([k, n]) => `<span class="hb ${k}" title="${n} ${fmtH(c.h[k])} 小時">${HOUR_ABBR[k]}${fmtH(c.h[k])}</span>`).join('');
+    const miss = !items && !c.off && c.past && !c.filled ? '<span class="miss" title="這天沒有填寫工作日誌">未填</span>' : '';
+    return `<td class="${c.off ? 'off' : ''} ${c.d === t ? 'today' : ''}"><a href="#/boss/${r.st.id}/log/${c.d}?v=day" title="${esc(r.st.name + ' ' + mdw(c.d))}${HOL[c.d] ? ' ' + esc(HOL[c.d].name) : ''}，點一下查看當天日誌">${items || miss || '&nbsp;'}</a></td>`;
+  }).join('')}</tr>`).join('');
+  const matrix = `<div class="att-wrap"><table class="att-grid"><thead><tr><th class="who">同仁</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+    <div class="att-legend">${HOURS.map(([k, n]) => `<span><span class="hb ${k}">${HOUR_ABBR[k]}</span>${n}</span>`).join('')}<span><span class="miss">未填</span>工作天沒有填寫日誌</span><span class="muted">數字為小時；點格子可查看當天日誌並留下回饋</span></div>`;
+
+  document.title = '出缺勤月報｜' + CFG().company;
+  return topbar({ mode: 'boss', tab: 'attendance' }) + `<main>
+    <div class="page-head"><div><h1>出缺勤月報</h1><p>${month.slice(0, 4)} 年 ${+month.slice(5)} 月　依各同仁工作日誌中的「出勤時數」統計</p></div>
+      <div class="row noprint"><a class="icon-btn" href="#/boss/attendance?m=${prevM}" aria-label="上個月">‹</a>
+        <input type="month" value="${month}" data-ch="attMonth" aria-label="選擇月份"><a class="icon-btn" href="#/boss/attendance?m=${nextM}" aria-label="下個月">›</a>
+        ${month !== t.slice(0, 7) ? `<a class="btn sm" href="#/boss/attendance">本月</a>` : ''}
+        <button class="btn sm" data-act="exportAttendance" data-m="${month}">匯出 CSV</button><button class="btn sm" data-act="print">列印</button></div></div>
+    <section class="att-sec"><h2>本月合計</h2>${A.rows.length ? summary : '<div class="empty"><p>尚未建立同仁。</p></div>'}</section>
+    <section class="att-sec"><h2>每日明細</h2>${A.rows.length ? matrix : ''}</section>
+  </main>`;
+}
+
+function exportAttendanceCSV(month) {
+  const A = attendanceData(month);
+  const rows = [['同仁', '日期', '星期', '假日', ...HOURS.map(([, n]) => n + '（小時）'), '日誌']];
+  A.rows.forEach(r => {
+    r.cells.forEach(c => {
+      const any = HOURS.some(([k]) => c.h[k]);
+      const miss = !c.off && c.past && !c.filled;
+      if (!any && !miss) return;
+      rows.push([r.st.name, c.d.replace(/-/g, '/'), WEEK[dowOf(c.d)], HOL[c.d] ? HOL[c.d].name : '', ...HOURS.map(([k]) => c.h[k] ? fmtH(c.h[k]) : ''), c.filled ? '已填' : '未填']);
+    });
+    rows.push([r.st.name + ' 合計', '', '', '', ...HOURS.map(([k]) => r.sum[k] ? fmtH(r.sum[k]) : '0'), `${r.filled}/${r.workdays} 個工作天已填`]);
+    rows.push([]);
+  });
+  download(`出缺勤_${month}.csv`, csv(rows), 'text/csv');
+}
+
+/* =====================================================================
  * 主管檢視
  * ===================================================================== */
 function symLi(st, html) { const s = ST[st || '']; return `<li><span class="sym ${s.cls}" title="${s.t}">${s.sym}</span><span>${html}</span></li>`; }
@@ -1815,7 +1907,7 @@ function viewBossBoard(q) {
     : '<div class="empty"><p>未來兩週沒有專案期程。</p></div>';
 
   return topbar({ mode: 'boss' }) + `<main>
-    <div class="page-head"><div><h1>全員總覽</h1><p>${mdw(date)}${HOL[date] ? '　' + esc(HOL[date].name) : ''}　各專員的工作日誌與完成狀況</p></div>
+    <div class="page-head"><div><h1>全員總覽</h1><p>${mdw(date)}${HOL[date] ? '　' + esc(HOL[date].name) : ''}　各同仁的工作日誌與完成狀況</p></div>
       <div class="row noprint"><a class="icon-btn" href="#/boss?d=${addDays(date, -1)}" aria-label="前一天">‹</a><input type="date" value="${date}" data-ch="bossDate" aria-label="選擇日期"><a class="icon-btn" href="#/boss?d=${addDays(date, 1)}" aria-label="後一天">›</a>${date !== t ? `<a class="btn sm" href="#/boss">今天</a>` : ''}<button class="btn sm" data-act="print">列印</button></div></div>
     ${modeNotice()}
     <div class="board">${cards}</div>
@@ -1918,6 +2010,7 @@ const ACT = {
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
   importPlan: el => importDialog(ctxSid(), el.dataset.pid),
+  exportAttendance: el => exportAttendanceCSV(el.dataset.m),
   tlDot: el => tlDetail(el.dataset.owner, el.dataset.pid, el.dataset.date),
   unlinkProject: el => unlinkProject(ctxSid(), el.dataset.lid),
   cleanLinks: () => {
@@ -2053,6 +2146,7 @@ const CH = {
   },
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
   tlWho: el => tlGo({ who: el.value }),
+  attMonth: el => { if (/^\d{4}-\d{2}$/.test(el.value)) go('#/boss/attendance?m=' + el.value); },
   tlClosed: el => tlGo({ closed: el.checked ? '1' : '' }),
   listAll: el => { S.ui.listAll = el.checked; try { localStorage.setItem('zjpm.listAll', el.checked ? '1' : ''); } catch (e) {} render({ keepScroll: true }); },
   calSide: el => { calFilter(el.dataset.sid).side = el.value; render({ keepScroll: true }); },

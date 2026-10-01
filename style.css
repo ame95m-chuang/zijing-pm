@@ -577,3 +577,35 @@ main.wide{max-width:none}
 .imp-json{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13.5px}
 .imp-json li.skip{opacity:.5;text-decoration:line-through}
 @media (max-width:720px){.imp-new.on{flex-wrap:wrap}.imp-new .field{width:100%!important}}
+
+/* ---------- 出缺勤月報 ---------- */
+.att-sec{margin-bottom:28px}
+.att-sec h2{font-size:17px;margin:0 0 10px}
+.att-sum{width:100%}
+.att-sum td,.att-sum th{padding:10px 14px}
+.att-sum .num{text-align:right;font-variant-numeric:tabular-nums}
+.att-sum td.num b{font-size:16px}
+.att-sum tfoot th{border-top:2px solid var(--ink);font-weight:700}
+.att-wrap{overflow-x:auto;background:var(--sheet);border:1px solid var(--line);border-radius:10px}
+.att-grid{border-collapse:collapse;font-size:12px;min-width:100%}
+.att-grid th,.att-grid td{border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);text-align:center;padding:0}
+.att-grid thead th{padding:6px 2px;font-weight:700;min-width:34px;font-variant-numeric:tabular-nums;background:var(--sheet)}
+.att-grid thead th small{display:block;font-weight:400;color:var(--ink3);font-size:10px}
+.att-grid th.off,.att-grid th.off small{color:var(--seal)}
+.att-grid td.off{background:var(--wk)}
+.att-grid th.today{background:var(--ame);color:#fff}.att-grid th.today small{color:#fff}
+.att-grid td.today{box-shadow:inset 0 0 0 2px var(--ame-soft)}
+.att-grid .who{position:sticky;left:0;z-index:1;background:var(--sheet);padding:6px 10px;text-align:left;white-space:nowrap;border-right:1px solid var(--line)}
+.att-grid td a{display:flex;flex-direction:column;align-items:center;gap:2px;min-height:44px;padding:4px 2px;justify-content:center;text-decoration:none;color:inherit}
+.att-grid td a:hover{background:var(--ame-tint)}
+.hb{display:inline-block;font-size:11px;font-weight:700;line-height:1.5;padding:0 4px;border-radius:3px;white-space:nowrap}
+.hb.ot{background:#DCE6F0;color:#2E4A66}
+.hb.comp{background:#DDEFEE;color:#1F5C5B}
+.hb.personal{background:#F6E7D2;color:#7A4A12}
+.hb.sick{background:#F5DCD9;color:#8A2F27}
+.hb.annual{background:#E2EEDC;color:#2F5A23}
+.miss{font-size:10.5px;color:var(--ink3);border:1px dashed var(--ink3);border-radius:3px;padding:0 3px}
+.att-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12.5px;color:var(--ink2);align-items:center}
+.att-legend>span{display:inline-flex;align-items:center;gap:5px}
+@media print{.att-wrap{overflow:visible}.att-grid{font-size:10px}.att-grid thead th{min-width:0}}
+.att-grid thead th.who{font-size:12px;color:var(--ink2);vertical-align:bottom}
