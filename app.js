@@ -308,7 +308,7 @@ const Sync = {
     const wait = Store.mode === 'server' ? Math.max(3000, 10000 - (now() - (this.lastFlush || 0))) : 700;
     this.timer = setTimeout(() => this.flush(), wait);
   },
-  holder(key) { return key === 'config' ? S.config : S.docs[key.slice(6)]; },
+  holder(key) { return key === 'config' ? S.config : key === 'schedule' ? S.sched : S.docs[key.slice(6)]; },
   set(st, msg) {
     this.state = st;
     const el = $('#savestate');
@@ -328,7 +328,7 @@ const Sync = {
         let res = await Store.save(key, h.data, h.rev);
         if (res.conflict) {
           const remote = res.doc;
-          if (key === 'config') {
+          if (key === 'config' || key === 'schedule') {   // 設定與主管的調整版本：以本機為準覆寫
             res = await Store.save(key, h.data, remote ? remote.rev : 0);
           } else {
             h.data = mergeStaff(h.data, normalizeStaff(remote ? remote.data : null));
@@ -338,7 +338,7 @@ const Sync = {
           if (res.conflict) throw new Error('conflict');
         }
         h.rev = res.rev;
-        if (key !== 'config') S.fetchedAt[key.slice(6)] = now();
+        if (key.startsWith('staff_')) S.fetchedAt[key.slice(6)] = now();
       } catch (e) {
         console.error(e);
         this.dirty.add(key); failed = true;
@@ -356,6 +356,7 @@ const Sync = {
 };
 function touchStaff(sid) { Sync.mark('staff_' + sid); }
 function touchConfig() { Sync.mark('config'); }
+function touchSched() { Sync.mark('schedule'); }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && Sync.dirty.size && !Sync.busy) { clearTimeout(Sync.timer); Sync.flush(); }
 });
@@ -363,8 +364,13 @@ window.addEventListener('beforeunload', e => {
   if (Sync.dirty.size || Sync.busy) { Sync.flush(); e.preventDefault(); e.returnValue = ''; }
 });
 
+function normalizeSched(x) {
+  const d = x && typeof x === 'object' ? x : {};
+  return { drafts: d.drafts && typeof d.drafts === 'object' && !Array.isArray(d.drafts) ? d.drafts : {} };
+}
 async function loadAll() {
-  const docs = await Store.load(['config']);
+  const docs = await Store.load(['config', 'schedule']);
+  S.sched = { rev: docs.schedule ? docs.schedule.rev : 0, data: normalizeSched(docs.schedule ? docs.schedule.data : null) };
   if (docs.config && docs.config.data) {
     S.config = { rev: docs.config.rev, data: normalizeConfig(docs.config.data) };
   } else {
@@ -663,6 +669,7 @@ function route(parts, q) {
     if (b === 'timeline') return viewProjects(true, Object.assign({}, q, { view: 'timeline' }));
     if (b === 'projects') return c && d ? viewCaseProject(true, c, d, q) : viewProjects(true, q);
     if (b === 'attendance') return viewBossAttendance(q);
+    if (b === 'schedule') return viewBossSchedule(q);
     if (b && staffOf(b) && S.docs[b]) return viewBossStaff(b, c || 'log', d, q);
     return viewBossBoard(q);
   }
@@ -685,6 +692,7 @@ function topbar(ctx) {
     mid = `<div class="who boss">主管檢視</div>
       <nav class="tabs" aria-label="人員">
         <a class="${!ctx.sid && !ctx.tab ? 'on' : ''}" href="#/boss">全員總覽</a>
+        <a class="${ctx.tab === 'schedule' ? 'on' : ''}" href="#/boss/schedule">工作期程表</a>
         <a class="${ctx.tab === 'projects' ? 'on' : ''}" href="#/boss/projects">專案總覽</a>
         <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
         ${CFG().staff.map(s => `<a class="${ctx.sid === s.id ? 'on' : ''}" href="#/boss/${s.id}">${esc(s.name)}</a>`).join('')}
@@ -1311,23 +1319,34 @@ function dayHTML(sid, date, readOnly) {
     </div>`;
   }).join('');
 
+  // 主管在「工作期程表」確認調整後寫入的標示
+  const bossTag = tk => {
+    const b = tk.boss; if (!b) return '';
+    const nm = id => staffOf(id) ? staffOf(id).name : '';
+    const txt = b.kind === 'add' ? '主管新增'
+      : b.kind === 'edit' ? `主管修改${b.old ? `（原：${b.old}）` : ''}`
+      : b.kind === 'move' ? (b.fromSid && b.fromSid !== sid ? `主管改派：原由 ${nm(b.fromSid)} 負責` : `主管調整：由 ${mdw(b.from)} 改到這天`) + (b.old ? `（原：${b.old}）` : '')
+      : b.kind === 'out' ? `主管改到 ${mdw(b.to)}${b.toSid && b.toSid !== sid ? `，改由 ${nm(b.toSid)} 負責` : ''}`
+      : b.kind === 'remove' ? '主管取消' : '主管調整';
+    return `<div class="boss-tag">${esc(txt)}</div>`;
+  };
   // 自排工作
   const taskRows = L.tasks.map(tk => {
     const p = byId(doc.projects, tk.pid);
     const s = ST[tk.status || ''];
     if (readOnly) {
       if (!(tk.text || '').trim()) return '';
-      return `<div class="task auto st-${s.cls}"><span class="tp ${p ? '' : 'none'}" style="${p ? `--c:${esc(p.color)}` : ''}">${esc(p ? projLabel(p) : '其他')}</span>
+      return `<div class="task auto st-${s.cls} ${tk.boss ? 'boss-adj' : ''}"><span class="tp ${p ? '' : 'none'}" style="${p ? `--c:${esc(p.color)}` : ''}">${esc(p ? projLabel(p) : '其他')}</span>
         <div class="task-body"><div class="task-text">${esc(tk.text)}</div>${tk.note ? `<div class="meta" style="color:var(--ink2)">說明：${esc(tk.note)}</div>` : ''}
-        ${tk.from ? `<div class="meta">由 ${mdw(tk.from)} 移入</div>` : ''}${tk.movedTo ? `<div class="meta">↪ 已改到 ${mdw(tk.movedTo)}</div>` : ''}</div>
+        ${tk.from ? `<div class="meta">由 ${mdw(tk.from)} 移入</div>` : ''}${tk.movedTo && !tk.boss ? `<div class="meta">↪ 已改到 ${mdw(tk.movedTo)}</div>` : ''}${bossTag(tk)}</div>
         <span class="sbadge ${s.cls}">${s.t}</span></div>`;
     }
     const opts = `<option value="">其他／雜事</option>` + projects.concat(p && !projects.includes(p) ? [p] : []).map(x => `<option value="${x.id}" ${x.id === tk.pid ? 'selected' : ''}>${esc(x.code ? x.code + ' ' : '')}${esc(x.name)}</option>`).join('');
-    return `<div class="task self st-${s.cls}" data-tid="${tk.id}">
+    return `<div class="task self st-${s.cls} ${tk.boss ? 'boss-adj' : ''}" data-tid="${tk.id}">
       <select class="task-projsel" data-ch="taskProj" style="--c:${p ? esc(p.color) : 'var(--line)'}" aria-label="所屬專案">${opts}</select>
       <div class="task-body"><input type="text" class="task-in" data-in="taskText" data-key="taskKey" value="${esc(tk.text || '')}" placeholder="工作內容，按 Enter 新增下一項" aria-label="工作內容">
         <input type="text" class="task-note" data-in="taskNote" value="${esc(tk.note || '')}" placeholder="說明（完成狀況、延宕原因、改期安排…）" aria-label="說明">
-        ${tk.from ? `<div class="meta">由 ${mdw(tk.from)} 移入</div>` : ''}${tk.movedTo ? `<div class="meta">↪ 已改到 ${mdw(tk.movedTo)}</div>` : ''}</div>
+        ${tk.from ? `<div class="meta">由 ${mdw(tk.from)} 移入</div>` : ''}${tk.movedTo && !tk.boss ? `<div class="meta">↪ 已改到 ${mdw(tk.movedTo)}</div>` : ''}${bossTag(tk)}</div>
       ${statusSelect(tk.status, 'data-ch="taskStatus"')}
       <button class="icon-btn" data-act="delTask" aria-label="刪除這項工作" title="刪除">✕</button>
     </div>`;
@@ -1929,6 +1948,327 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openSearch(); }
   else if (e.key === '/' && !typing && !document.querySelector('.modal-bg')) { e.preventDefault(); openSearch(); }
 });
+
+/* =====================================================================
+ * 主管檢視：工作期程表（未來兩週，每位同仁一欄）
+ * 路由：#/boss/schedule?d=日期&v=draft
+ *  - 員工原排：直接讀取各同仁工作日誌的自排工作（即時）
+ *  - 調整版本：主管的副本，存在 data/schedule.json，修改不影響同仁
+ *  - 確認調整期程：把有變動的項目寫回同仁的工作日誌，並以「主管調整」顏色標示
+ * ===================================================================== */
+const SCHED_DAYS = 14;
+const LEAVE_NAME = { annual: '特休', personal: '事假', sick: '病假', comp: '補休' };
+const BOSS_KIND = { add: '主管新增', edit: '主管修改', move: '主管調整', out: '主管改期', remove: '主管取消' };
+
+function schedDates(start) { const a = []; for (let i = 0; i < SCHED_DAYS; i++) a.push(addDays(start, i)); return a; }
+function schedCols() {
+  return [['pm', '企劃編輯'], ['design', '設計']].map(([role, name]) => ({ role, name, staff: CFG().staff.filter(s => S.docs[s.id] && roleOf(s.id) === role) })).filter(g => g.staff.length);
+}
+/** 同仁某天的自排工作（員工原排） */
+function origItems(sid, date) {
+  const L = D(sid).logs[date]; if (!L) return [];
+  const vdoc = V(sid);
+  return (L.tasks || []).filter(tk => (tk.text || '').trim() && tk.status !== 'moved').map(tk => {
+    const p = tk.pid ? byId(vdoc.projects, tk.pid) : null;
+    return { tid: tk.id, text: tk.text.trim(), pid: tk.pid || '', p, status: tk.status || '', boss: tk.boss || null };
+  });
+}
+function leaveText(sid, date) {
+  const L = D(sid).logs[date]; if (!L) return '';
+  return Object.entries(LEAVE_NAME).filter(([k]) => num((L.hours || {})[k])).map(([k, n]) => `◆${n} ${num(L.hours[k])}h`).join('　');
+}
+function dayMilestones(date) {
+  const seen = new Set(), out = [];
+  CFG().staff.forEach(st => {
+    if (!S.docs[st.id]) return;
+    const doc = D(st.id);
+    doc.milestones.forEach(m => {
+      if (m.date !== date || !(m.text || '').trim() || seen.has(m.id)) return;
+      const p = byId(doc.projects, m.projectId); if (!p || p.status === 'closed') return;
+      seen.add(m.id); out.push({ m, p });
+    });
+  });
+  return out.sort((a, b) => String(a.p.code || '').localeCompare(String(b.p.code || ''), 'zh-Hant', { numeric: true }));
+}
+
+/* ---------------- 調整版本（副本） ---------------- */
+const SCH = () => S.sched.data;
+function draftOf(start) { return SCH().drafts[start] || null; }
+function createDraft(start) {
+  const dr = { start, created: now(), u: now(), status: 'draft', appliedAt: 0, cells: {}, removed: [] };
+  CFG().staff.forEach(st => {
+    if (!S.docs[st.id]) return;
+    dr.cells[st.id] = {};
+    schedDates(start).forEach(d => {
+      const items = origItems(st.id, d).filter(it => it.status !== 'cancel');
+      if (items.length) dr.cells[st.id][d] = items.map(it => ({ id: uid(), text: it.text, pid: it.pid, src: { sid: st.id, date: d, tid: it.tid, text: it.text, pid: it.pid } }));
+    });
+  });
+  SCH().drafts[start] = dr;
+  // 只保留最近 12 份
+  const keys = Object.keys(SCH().drafts).sort();
+  while (keys.length > 12) delete SCH().drafts[keys.shift()];
+  touchSched();
+  return dr;
+}
+function itemKind(it, sid, date) {
+  if (!it.src) return 'add';
+  if (it.src.sid !== sid || it.src.date !== date) return 'move';
+  if (it.text !== it.src.text || (it.pid || '') !== (it.src.pid || '')) return 'edit';
+  return '';
+}
+function draftStats(dr) {
+  const n = { add: 0, move: 0, edit: 0, remove: (dr.removed || []).length };
+  Object.entries(dr.cells || {}).forEach(([sid, days]) => Object.entries(days).forEach(([d, items]) => items.forEach(it => { const k = itemKind(it, sid, d); if (k) n[k]++; })));
+  n.total = n.add + n.move + n.edit + n.remove;
+  return n;
+}
+
+/* ---------------- 表格 ---------------- */
+function schedTableHTML(start, mode) {
+  const dates = schedDates(start), t = todayStr();
+  const groups = schedCols(), staff = groups.flatMap(g => g.staff);
+  const dr = mode === 'draft' ? draftOf(start) : null;
+  const projOf = (sid, pid) => pid ? byId(V(sid).projects, pid) : null;
+  const itemHTML = (sid, d, it) => {
+    const p = it.p !== undefined ? it.p : projOf(sid, it.pid);
+    const lab = p ? `<b style="color:${esc(p.color)}">${esc(shortOf(p))}</b>｜` : '';
+    let cls = '', tag = '';
+    if (mode === 'draft') {
+      const k = itemKind(it, sid, d);
+      if (k) { cls = 'chg'; tag = k === 'add' ? '新增' : k === 'edit' ? '修改' : (it.src.sid !== sid ? `由${esc(staffOf(it.src.sid) ? staffOf(it.src.sid).name : '')}改派` : `由${md(it.src.date)}改期`); }
+    } else if (it.boss) { cls = 'chg applied'; tag = BOSS_KIND[it.boss.kind] || '主管調整'; }
+    if (it.status === 'cancel') cls += ' cancel';
+    return `<div class="si ${cls}">${lab}${esc(it.text)}${tag ? `<span class="si-tag">${tag}</span>` : ''}</div>`;
+  };
+  const cellItems = (sid, d) => {
+    if (mode === 'draft') {
+      const list = (dr.cells[sid] && dr.cells[sid][d]) || [];
+      const rem = (dr.removed || []).filter(r => r.sid === sid && r.date === d);
+      return list.map(it => itemHTML(sid, d, it)).join('') + rem.map(r => { const p = projOf(sid, r.pid); return `<div class="si chg removed">${p ? `<b>${esc(shortOf(p))}</b>｜` : ''}${esc(r.text)}<span class="si-tag">取消</span></div>`; }).join('');
+    }
+    return origItems(sid, d).map(it => itemHTML(sid, d, it)).join('');
+  };
+  // 每格內容 → 用來合併連續相同的工作
+  const cellHTML = {}, sig = {};
+  staff.forEach(st => dates.forEach(d => {
+    const lv = leaveText(st.id, d);
+    const h = (lv ? `<div class="si leave">${esc(lv)}</div>` : '') + cellItems(st.id, d);
+    cellHTML[st.id + d] = h; sig[st.id + d] = h.replace(/\s+/g, ' ');
+  }));
+  // 休假連續區段
+  const offRun = {};
+  for (let i = 0; i < dates.length; i++) {
+    if (!isOff(dates[i]) || (i > 0 && isOff(dates[i - 1]))) continue;
+    let j = i; while (j + 1 < dates.length && isOff(dates[j + 1])) j++;
+    const ds = dates.slice(i, j + 1), names = Array.from(new Set(ds.map(d => HOL[d] && !HOL[d].work ? HOL[d].name : '').filter(Boolean)));
+    offRun[dates[i]] = { n: ds.length, label: names.length ? `◆${names.join('／')}${ds.length > 1 ? `連假${ds.length}日` : ''}` : `◆週休${ds.length}日` };
+    for (let k = i + 1; k <= j; k++) offRun[dates[k]] = 'skip';
+  }
+  // 每欄的合併（只在連續的工作天之間）
+  const span = {};
+  staff.forEach(st => {
+    let i = 0;
+    while (i < dates.length) {
+      const d = dates[i];
+      if (isOff(d)) { i++; continue; }
+      let j = i;
+      if (sig[st.id + d]) while (j + 1 < dates.length && !isOff(dates[j + 1]) && sig[st.id + dates[j + 1]] === sig[st.id + d]) j++;
+      span[st.id + d] = j - i + 1;
+      for (let k = i + 1; k <= j; k++) span[st.id + dates[k]] = 0;
+      i = j + 1;
+    }
+  });
+  const editable = mode === 'draft' && dr && dr.status === 'draft';
+  const head1 = `<tr><th rowspan="2" class="c-date">日期</th><th rowspan="2" class="c-dow">星期</th>${groups.map(g => `<th colspan="${g.staff.length}" class="grp ${g.role}">${g.name}</th>`).join('')}<th rowspan="2" class="c-ms">重要期程</th></tr>`;
+  const head2 = `<tr>${staff.map(st => `<th class="st-col" style="--c:${esc(st.color)}">${esc(st.name)}</th>`).join('')}</tr>`;
+  const rows = dates.map(d => {
+    const off = isOff(d), run = offRun[d];
+    const msHTML = dayMilestones(d).map(({ m, p }) => `<div class="si"><b style="color:${esc(p.color)}">${esc(shortOf(p))}</b>｜${esc(m.text.trim().split('\n')[0])}${m.side === 'client' ? '<span class="si-tag cl">單位</span>' : ''}</div>`).join('');
+    let mid = '';
+    if (off) { if (run && run !== 'skip') mid = `<td colspan="${staff.length}" rowspan="${run.n}" class="offband">${esc(run.label)}</td>`; }
+    else mid = staff.map(st => {
+      const n = span[st.id + d]; if (!n) return '';
+      return `<td rowspan="${n}" class="cell ${editable ? 'edit' : ''}" ${editable ? `data-act="schedCell" data-sid="${st.id}" data-date="${d}" title="點一下調整 ${esc(st.name)} ${md(d)} 的工作"` : ''}>${cellHTML[st.id + d] || (editable ? '<span class="add-hint">＋</span>' : '')}</td>`;
+    }).join('');
+    return `<tr class="${off ? 'off' : ''} ${d === t ? 'today' : ''}"><td class="c-date">${d.slice(5).replace('-', '')}</td><td class="c-dow">${WEEK[dowOf(d)]}</td>${mid}<td class="c-ms">${msHTML}</td></tr>`;
+  }).join('');
+  // 專案一覽（負責／參與）
+  const projRows = CFG().staff.filter(s => S.docs[s.id]).flatMap(o => sortedProjects(D(o.id), false).map(p => ({ o, p, parts: participantsOf(o.id, p.id) })));
+  const legend = projRows.length ? `<table class="sched-legend"><thead><tr><th>專案</th><th>委託單位</th><th>負責</th><th>參與</th></tr></thead><tbody>${projRows.map(x => `<tr><td><b style="color:${esc(x.p.color)}">${esc(shortOf(x.p))}</b>　${esc(x.p.name)}</td><td>${esc(x.p.client || '')}</td><td><span class="who-chip" style="--c:${esc(x.o.color)}">${esc(x.o.name)}</span></td><td>${x.parts.map(s => `<span class="who-chip" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</td></tr>`).join('')}</tbody></table>` : '';
+  const end = dates[dates.length - 1];
+  return `<div class="sched-sheet" id="sched-sheet">
+    <h2 class="sched-title">工作期程表（${start.replace(/-/g, '/')}–${end.slice(5).replace('-', '/')}）${mode === 'draft' ? `<span class="sched-ver">${dr && dr.status === 'applied' ? '調整版本・已確認' : '調整版本'}</span>` : '<span class="sched-ver orig">員工原排</span>'}</h2>
+    <div class="sched-wrap"><table class="sched">${head1}${head2}${rows}</table></div>${legend}</div>`;
+}
+
+function viewBossSchedule(q) {
+  const t = todayStr();
+  const start = mondayOf(isDate(q.d) ? q.d : t);
+  const mode = q.v === 'draft' ? 'draft' : 'orig';
+  const dr = draftOf(start);
+  const base = o => '#/boss/schedule?' + Object.entries(Object.assign({ d: start, v: mode === 'draft' ? 'draft' : '' }, o)).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join('&');
+  const st = dr ? draftStats(dr) : null;
+  let notice = '', actions = '';
+  if (mode === 'orig') {
+    notice = `<div class="notice info noprint">這是同仁自己在工作日誌安排的工作（即時）。要調整時請建立「調整版本」，在副本中修改不會影響同仁的安排。</div>`;
+    actions = dr ? `<a class="btn primary" href="${base({ v: 'draft' })}">${dr.status === 'applied' ? '查看調整版本' : '繼續編輯調整版本'}</a>` : `<button class="btn primary" data-act="schedNewDraft" data-start="${start}">建立調整版本</button>`;
+  } else if (!dr) {
+    notice = `<div class="empty"><h3>這兩週還沒有調整版本</h3><p>建立後會複製一份員工原排，可以自由修改。</p><button class="btn primary" data-act="schedNewDraft" data-start="${start}">建立調整版本</button></div>`;
+  } else if (dr.status === 'applied') {
+    const at = new Date(dr.appliedAt);
+    notice = `<div class="notice ok noprint">已於 ${at.getMonth() + 1}/${at.getDate()} ${hm(dr.appliedAt)} 確認調整，共 ${st.total} 項已寫入同仁的工作日誌，並以「主管調整」顏色標示。這份版本已鎖定。</div>`;
+    actions = `<button class="btn" data-act="schedNewDraft" data-start="${start}" data-confirm="1">建立新的調整版本</button>`;
+  } else {
+    notice = `<div class="notice noprint">調整版本：點任一格即可修改、新增、改期或改派。已調整 <b>${st.total}</b> 項（新增 ${st.add}、改期／改派 ${st.move}、修改 ${st.edit}、取消 ${st.remove}）。修改內容只存在副本中，按「確認調整期程」後才會寫入同仁的工作日誌。</div>`;
+    actions = `<button class="btn primary" data-act="schedApply" data-start="${start}" ${st.total ? '' : 'disabled'}>確認調整期程</button><button class="btn danger" data-act="schedDiscard" data-start="${start}">捨棄調整版本</button>`;
+  }
+  const showTable = mode === 'orig' || dr;
+  document.title = '工作期程表｜' + CFG().company;
+  return topbar({ mode: 'boss', tab: 'schedule' }) + `<main class="wide">
+    <div class="page-head"><div><h1>工作期程表</h1><p>每位同仁未來兩週的自排工作與重要期程。適合每週一開會時逐一確認。</p></div></div>
+    <div class="cal-bar noprint">
+      <div class="seg" role="tablist"><a role="tab" class="${mode === 'orig' ? 'on' : ''}" href="${base({ v: '' })}">員工原排</a><a role="tab" class="${mode === 'draft' ? 'on' : ''}" href="${base({ v: 'draft' })}">調整版本${dr && dr.status === 'draft' && st.total ? `（${st.total}）` : ''}</a></div>
+      <div class="cal-nav"><a class="icon-btn" href="${base({ d: addDays(start, -7) })}" aria-label="前一週">‹</a><a class="btn sm" href="${base({ d: t })}">本週</a><a class="icon-btn" href="${base({ d: addDays(start, 7) })}" aria-label="後一週">›</a>
+        <h3>${md(start)}–${md(addDays(start, SCHED_DAYS - 1))}</h3></div>
+      <span class="grow"></span>
+      ${showTable ? `<button class="btn sm" data-act="schedExport" data-kind="png">匯出圖片</button><button class="btn sm" data-act="schedExport" data-kind="pdf">匯出 PDF</button>` : ''}
+      ${actions}
+    </div>
+    ${notice}
+    ${showTable ? schedTableHTML(start, mode) : ''}
+  </main>`;
+}
+
+/* ---------------- 編輯一格 ---------------- */
+function schedCellDialog(start, sid, date) {
+  const dr = draftOf(start); if (!dr || dr.status !== 'draft') return;
+  const st = staffOf(sid);
+  const cur = ((dr.cells[sid] || {})[date] || []).map(it => Object.assign({}, it));
+  const dates = schedDates(start);
+  const staff = schedCols().flatMap(g => g.staff);
+  const row = (it, i) => {
+    const projs = sortedProjects(V(sid), false);
+    return `<div class="sc-row" data-i="${i}">
+      <select class="sc-proj" aria-label="專案"><option value="">其他／雜事</option>${projs.map(p => `<option value="${p.id}" ${p.id === it.pid ? 'selected' : ''}>${esc(shortOf(p))}｜${esc(p.name)}</option>`).join('')}</select>
+      <input class="sc-text" type="text" value="${esc(it.text)}" placeholder="工作內容" aria-label="工作內容">
+      <select class="sc-date" aria-label="日期">${dates.map(d => `<option value="${d}" ${d === (it.date || date) ? 'selected' : ''}>${mdw(d)}${isOff(d) ? '（休）' : ''}</option>`).join('')}</select>
+      <select class="sc-who" aria-label="負責同仁">${staff.map(s => `<option value="${s.id}" ${s.id === (it.sid || sid) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      <button type="button" class="icon-btn sc-del" aria-label="刪除" title="刪除">✕</button>
+      ${it.src ? `<div class="sc-orig">原排：${mdw(it.src.date)} ${esc(staffOf(it.src.sid) ? staffOf(it.src.sid).name : '')}｜${esc(it.src.text)}</div>` : '<div class="sc-orig new">新增的工作</div>'}
+    </div>`;
+  };
+  const paint = bg => { bg.querySelector('.sc-list').innerHTML = cur.map(row).join('') || '<p class="muted small">這天沒有工作，按下方「＋ 新增工作」加入。</p>'; };
+  const read = bg => bg.querySelectorAll('.sc-row').forEach(r => {
+    const it = cur[+r.dataset.i];
+    it.pid = r.querySelector('.sc-proj').value; it.text = r.querySelector('.sc-text').value.trim();
+    it.date = r.querySelector('.sc-date').value; it.sid = r.querySelector('.sc-who').value;
+  });
+  openModal({
+    title: `${st ? st.name : ''}｜${mdw(date)} 的工作`, wide: true,
+    body: `<p class="muted small" style="margin:0 0 10px">可以修改內容、改到其他天或改派給其他同仁。這裡的修改只存在調整版本中。</p><div class="sc-list"></div><button type="button" class="btn sm sc-add">＋ 新增工作</button>`,
+    actions: [{ label: '取消', cancel: true }, { label: '套用到調整版本', cls: 'primary', primary: true, onClick: bg => {
+      read(bg);
+      const removedHere = [];
+      const keep = cur.filter(it => { if (it.del || !it.text) { if (it.src) removedHere.push(it.src); return false; } return true; });
+      dr.cells[sid] = dr.cells[sid] || {};
+      dr.cells[sid][date] = [];
+      keep.forEach(it => {
+        const ts = it.sid || sid, td = it.date || date;
+        const o = { id: it.id || uid(), text: it.text, pid: ts === sid ? it.pid : (it.pid && byId(V(ts).projects, it.pid) ? it.pid : ''), src: it.src || null };
+        dr.cells[ts] = dr.cells[ts] || {}; (dr.cells[ts][td] = dr.cells[ts][td] || []).push(o);
+      });
+      removedHere.forEach(s => { if (!dr.removed.some(r => r.tid === s.tid && r.sid === s.sid)) dr.removed.push({ sid: s.sid, date: s.date, tid: s.tid, text: s.text, pid: s.pid }); });
+      dr.u = now(); touchSched(); render({ keepScroll: true });
+    } }],
+    onOpen: bg => {
+      paint(bg);
+      bg.querySelector('.sc-add').addEventListener('click', () => { read(bg); cur.push({ id: uid(), text: '', pid: '', src: null }); paint(bg); const ins = bg.querySelectorAll('.sc-text'); if (ins.length) ins[ins.length - 1].focus(); });
+      bg.querySelector('.sc-list').addEventListener('click', e => {
+        const b = e.target.closest('.sc-del'); if (!b) return;
+        read(bg); const r = b.closest('.sc-row'); cur[+r.dataset.i].del = true; r.remove();
+      });
+    },
+  });
+}
+
+/* ---------------- 確認調整期程：寫回同仁的工作日誌 ---------------- */
+function applyDraft(dr) {
+  const at = now(), touched = new Set();
+  const findTask = (sid, date, tid) => { const L = S.docs[sid] && D(sid).logs[date]; return L ? { L, tk: (L.tasks || []).find(x => x.id === tid) } : { L: null, tk: null }; };
+  const addTask2 = (sid, date, it, boss) => {
+    const L = getLog(D(sid), date, true);
+    L.tasks.push({ id: uid(), text: it.text, pid: it.pid || '', status: '', note: '', boss });
+    staffTouchLog(L); touched.add(sid);
+  };
+  (dr.removed || []).forEach(r => { const { L, tk } = findTask(r.sid, r.date, r.tid); if (tk) { tk.status = 'cancel'; tk.boss = { kind: 'remove', at }; staffTouchLog(L); touched.add(r.sid); } });
+  Object.entries(dr.cells || {}).forEach(([sid, days]) => Object.entries(days).forEach(([d, items]) => items.forEach(it => {
+    const k = itemKind(it, sid, d); if (!k) return;
+    if (k === 'add') { addTask2(sid, d, it, { kind: 'add', at }); return; }
+    const { L, tk } = findTask(it.src.sid, it.src.date, it.src.tid);
+    if (k === 'edit') {
+      if (tk) { tk.boss = { kind: 'edit', at, old: tk.text }; tk.text = it.text; tk.pid = it.pid || ''; staffTouchLog(L); touched.add(sid); }
+      else addTask2(sid, d, it, { kind: 'add', at });
+      return;
+    }
+    // 改期或改派
+    if (tk) { tk.status = 'moved'; tk.movedTo = d; tk.boss = { kind: 'out', at, to: d, toSid: sid }; staffTouchLog(L); touched.add(it.src.sid); }
+    addTask2(sid, d, it, { kind: 'move', at, from: it.src.date, fromSid: it.src.sid, old: it.src.text !== it.text ? it.src.text : '' });
+  })));
+  touched.forEach(sid => touchStaff(sid));
+  dr.status = 'applied'; dr.appliedAt = at; dr.u = at; touchSched();
+  return touched.size;
+}
+
+/* ---------------- 匯出圖片／PDF ---------------- */
+const LIBS = {
+  h2c: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+  pdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+};
+function loadScript(src) {
+  return new Promise((ok, fail) => {
+    if (document.querySelector(`script[src="${src}"]`)) { ok(); return; }
+    const s = document.createElement('script'); s.src = src; s.onload = () => ok(); s.onerror = () => fail(new Error('無法載入匯出工具，請確認網路連線'));
+    document.head.appendChild(s);
+  });
+}
+async function schedExport(kind) {
+  const el = $('#sched-sheet'); if (!el) return;
+  toast('正在產生' + (kind === 'pdf' ? ' PDF' : '圖片') + '…');
+  try {
+    await loadScript(LIBS.h2c);
+    if (kind === 'pdf') await loadScript(LIBS.pdf);
+    // 以畫面上表格的實際寬度輸出（同仁多時表格較寬，會完整輸出不截斷）
+    const tbl = el.querySelector('.sched');
+    const w = Math.max(1200, el.clientWidth, tbl ? tbl.scrollWidth + 36 : 0);
+    el.classList.add('exporting'); el.style.width = w + 'px';
+    const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#ffffff', width: w, height: el.scrollHeight, windowWidth: w + 40 });
+    el.classList.remove('exporting'); el.style.width = '';
+    const q = S.route.q, start = mondayOf(isDate(q.d) ? q.d : todayStr());
+    const name = `工作期程表_${start}${q.v === 'draft' ? '_調整版本' : ''}`;
+    if (kind === 'png') {
+      const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = name + '.png'; document.body.appendChild(a); a.click(); a.remove();
+    } else {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
+      const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 8;
+      const r = Math.min((pw - 2 * m) / canvas.width, (ph - 2 * m) / canvas.height);
+      const w = canvas.width * r, h = canvas.height * r;
+      if (h <= ph - 2 * m) pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', (pw - w) / 2, m, w, h);
+      else {  // 太長時分頁
+        const r2 = (pw - 2 * m) / canvas.width, sliceH = Math.floor((ph - 2 * m) / r2);
+        for (let y = 0, first = true; y < canvas.height; y += sliceH, first = false) {
+          const c = document.createElement('canvas'); c.width = canvas.width; c.height = Math.min(sliceH, canvas.height - y);
+          c.getContext('2d').drawImage(canvas, 0, y, canvas.width, c.height, 0, 0, canvas.width, c.height);
+          if (!first) pdf.addPage();
+          pdf.addImage(c.toDataURL('image/jpeg', 0.9), 'JPEG', m, m, canvas.width * r2, c.height * r2);
+        }
+      }
+      pdf.save(name + '.pdf');
+    }
+    toast('已下載');
+  } catch (e) { el.classList.remove('exporting'); console.error(e); toast(e.message || '匯出失敗', true); }
+}
 
 /* =====================================================================
  * 匯入專案期程：① 專案匯入檔（JSON）② 直接貼上文字（逗號分隔或從 Excel 複製）
@@ -2621,6 +2961,25 @@ const ACT = {
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
   openSearch: () => openSearch(),
+  schedNewDraft: async el => {
+    const start = el.dataset.start;
+    if (draftOf(start) && !(await confirmBox('建立新的調整版本', '會以目前的員工原排重新建立一份調整版本，取代舊的版本。', '建立'))) return;
+    createDraft(start); go(`#/boss/schedule?d=${start}&v=draft`);
+  },
+  schedDiscard: async el => {
+    const start = el.dataset.start;
+    if (!(await confirmBox('捨棄調整版本', '確定捨棄這份調整版本？同仁的工作日誌不受影響。', '捨棄', true))) return;
+    delete SCH().drafts[start]; touchSched(); go(`#/boss/schedule?d=${start}`);
+  },
+  schedApply: async el => {
+    const start = el.dataset.start; const dr = draftOf(start); if (!dr) return;
+    const st = draftStats(dr); if (!st.total) { toast('調整版本沒有任何變動'); return; }
+    if (!(await confirmBox('確認調整期程', `將把 ${st.total} 項調整（新增 ${st.add}、改期／改派 ${st.move}、修改 ${st.edit}、取消 ${st.remove}）寫入同仁的工作日誌，並以「主管調整」顏色標示。\n確認後這份調整版本會鎖定。`, '確認調整'))) return;
+    const n = applyDraft(dr);
+    toast(`已套用到 ${n} 位同仁的工作日誌`); render({ keepScroll: true });
+  },
+  schedCell: el => { const q = S.route.q; schedCellDialog(mondayOf(isDate(q.d) ? q.d : todayStr()), el.dataset.sid, el.dataset.date); },
+  schedExport: el => schedExport(el.dataset.kind),
   addProjNote: el => addProjNote(el),
   phAllNotes: () => { const q = Object.assign({}, S.route.q, { notes: 'all' }); go(location.hash.split('?')[0] + '?' + Object.entries(q).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&')); },
   importPlan: el => importDialog(ctxSid(), el.dataset.pid),

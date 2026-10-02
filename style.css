@@ -766,3 +766,57 @@ main.wide{max-width:none}
   .home-nav{margin-top:0;max-width:none;flex:1;min-width:150px}
   .home-range{width:100%;max-width:none;margin:0}
 }
+
+/* ---------- 主管調整（固定的琥珀色標示） ---------- */
+.task.boss-adj{background:#FFF4D6;box-shadow:inset 4px 0 0 #D97706;border-radius:6px;padding-left:10px}
+.task.boss-adj .task-in,.task.boss-adj .task-text{font-weight:700;color:#7C3A00}
+.boss-tag{display:inline-block;margin-top:4px;font-size:12px;font-weight:700;color:#fff;background:#D97706;border-radius:4px;padding:1px 8px}
+.notice.ok{background:#E6F3EC;border-color:#B9DCC8;color:#245A40}
+
+/* ---------- 工作期程表 ---------- */
+.sched-sheet{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px 18px 22px;display:grid;gap:14px}
+.sched-sheet.exporting{border:0;border-radius:0}
+.sched-sheet.exporting .sched-wrap{overflow:visible}
+.sched-title{text-align:center;font-family:var(--serif);font-size:24px;margin:0;display:flex;justify-content:center;align-items:center;gap:12px}
+.sched-ver{font-family:var(--sans);font-size:13px;font-weight:700;background:#D97706;color:#fff;border-radius:999px;padding:2px 12px}
+.sched-ver.orig{background:var(--ame)}
+.sched-wrap{overflow-x:auto}
+.sched{border-collapse:collapse;width:100%;font-size:13px;line-height:1.5}
+.sched th,.sched td{border:1px solid #C9D0D8;padding:4px 7px;vertical-align:middle}
+.sched thead th,.sched tr:first-child th{background:#5F6A77;color:#fff;font-weight:700;text-align:center}
+.sched th.grp.pm{background:#46607A}
+.sched th.grp.design{background:#2E7D8C}
+.sched th.st-col{display:table-cell;background:var(--c);color:#fff;min-width:150px;letter-spacing:.1em;font-size:14px}
+.sched .c-date,.sched .c-dow{text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--ink2);width:1%}
+.sched th.c-date,.sched th.c-dow,.sched th.c-ms{background:#5F6A77}
+.sched .c-ms{min-width:220px;max-width:340px;background:#FAFBFC}
+.sched th.c-ms{background:#5F6A77}
+.sched tr.off td.c-date,.sched tr.off td.c-dow{background:#EEF3E8;color:var(--seal)}
+.sched td.offband{background:#E4EDDA;text-align:center;font-weight:700;color:#3B5B2A;letter-spacing:.1em}
+.sched tr.off td.c-ms{background:#F3F7EF}
+.sched tr.today td.c-date,.sched tr.today td.c-dow{background:var(--ame);color:#fff}
+.sched td.cell{min-width:150px;max-width:300px}
+.sched td.cell.edit{cursor:pointer}
+.sched td.cell.edit:hover{background:var(--ame-tint)}
+.sched .add-hint{color:var(--ink3);opacity:0;font-size:16px}
+.sched td.cell.edit:hover .add-hint{opacity:1}
+.si{padding:1px 0}
+.si b{font-weight:700}
+.si.leave{color:#2E7D52;font-weight:700}
+.si.chg{background:#FFF4D6;box-shadow:inset 3px 0 0 #D97706;padding:1px 6px;margin:1px 0;border-radius:3px;font-weight:700;color:#7C3A00}
+.si.removed{text-decoration:line-through;text-decoration-color:#B45309;opacity:.75}
+.si.cancel{text-decoration:line-through;opacity:.6}
+.si-tag{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;background:#D97706;color:#fff;border-radius:3px;padding:0 5px;text-decoration:none}
+.si-tag.cl{background:var(--line2);color:var(--ink2)}
+.sched-legend{border-collapse:collapse;font-size:12.5px;width:100%}
+.sched-legend th,.sched-legend td{border:1px solid #DDE2E8;padding:3px 8px;text-align:left}
+.sched-legend th{background:#F1F3F5;color:var(--ink2)}
+.who-chip{display:inline-block;font-size:12px;font-weight:700;color:#fff;background:var(--c);border-radius:3px;padding:0 7px;margin:1px 3px 1px 0}
+.sc-list{display:grid;gap:10px;margin-bottom:12px}
+.sc-row{display:grid;grid-template-columns:170px 1fr 120px 100px auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:8px}
+.sc-row input,.sc-row select{padding:6px 8px}
+.sc-orig{grid-column:1/-1;font-size:12px;color:var(--ink3)}
+.sc-orig.new{color:#B45309;font-weight:700}
+@media (max-width:720px){.sc-row{grid-template-columns:1fr 1fr}.sc-row .sc-text{grid-column:1/-1}}
+@media print{.sched-wrap{overflow:visible}.sched{font-size:10px}.sched th.st-col{min-width:0}}
+.boss-tag{width:fit-content;align-self:flex-start}
