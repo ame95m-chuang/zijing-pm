@@ -691,11 +691,10 @@ function topbar(ctx) {
   } else if (ctx.mode === 'boss') {
     mid = `<div class="who boss">主管檢視</div>
       <nav class="tabs" aria-label="人員">
-        <a class="${!ctx.sid && !ctx.tab ? 'on' : ''}" href="#/boss">全員總覽</a>
+        <a class="${!ctx.tab ? 'on' : ''}" href="#/boss">全員總覽</a>
         <a class="${ctx.tab === 'schedule' ? 'on' : ''}" href="#/boss/schedule">工作期程表</a>
         <a class="${ctx.tab === 'projects' ? 'on' : ''}" href="#/boss/projects">專案總覽</a>
         <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
-        ${CFG().staff.map(s => `<a class="${ctx.sid === s.id ? 'on' : ''}" href="#/boss/${s.id}">${esc(s.name)}</a>`).join('')}
       </nav>`;
   } else if (ctx.mode === 'projects') {
     mid = `<div class="who">專案總覽</div>`;
@@ -2836,39 +2835,17 @@ function viewBossBoard(q) {
     </article>`;
   }).join('');
 
-  // 未來兩週全員重要期程：參與專案的同一筆期程合併成一行（負責的企劃編輯在前）
-  const to = addDays(date, 13);
-  const merged = {};   // 日期 -> Map(期程id -> { m, p, owner, people })
-  const order = id => CFG().staff.findIndex(s => s.id === id);
-  CFG().staff.forEach(st => {
-    const map = milestoneMap(V(st.id), date, to, (m, p) => p.status !== 'closed');
-    Object.entries(map).forEach(([d, arr]) => arr.forEach(it => {
-      if (it.cont) return;
-      const day = merged[d] = merged[d] || new Map();
-      let g = day.get(it.m.id);
-      if (!g) { g = { m: it.m, p: it.p, owner: it.p.link ? it.p.link.sid : st.id, people: [] }; day.set(it.m.id, g); }
-      if (!it.p.link) { g.owner = st.id; g.p = it.p; }
-      if (!g.people.some(x => x.id === st.id)) g.people.push(st);
-    }));
-  });
-  Object.values(merged).forEach(day => day.forEach(g => g.people.sort((x, y) => (x.id === g.owner ? -1 : y.id === g.owner ? 1 : order(x.id) - order(y.id)))));
-  const days = Object.keys(merged).sort();
-  const upcoming = days.length ? `<div class="agenda">${days.map(d => `<div class="ag-day ${isOff(d) ? 'off' : ''}"><div class="ag-date">${mdw(d)}${HOL[d] ? `<small>${esc(HOL[d].name)}</small>` : ''}</div>
-    <ul class="ag-items" style="margin:0">${Array.from(merged[d].values()).map(({ m, p, people }) => `<li class="row" style="gap:8px;flex-wrap:nowrap;align-items:baseline"><span class="who-tags">${people.map(st => `<span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span>`).join('')}</span><span><b style="color:${esc(p.color)}" title="${esc(fullOf(p))}">${esc(shortOf(p))}</b>｜${esc(m.text.trim().replace(/\n/g, '／'))}${m.side === 'client' ? ' <span class="tag client">單位</span>' : ''}${m.tentative ? ' <span class="tag tent">待確認</span>' : ''}${m.endDate ? ` <span class="tag">至 ${md(m.endDate)}</span>` : ''}</span></li>`).join('')}</ul></div>`).join('')}</div>`
-    : '<div class="empty"><p>未來兩週沒有專案期程。</p></div>';
-
   return topbar({ mode: 'boss' }) + `<main>
     <div class="page-head"><div><h1>全員總覽</h1><p>${mdw(date)}${HOL[date] ? '　' + esc(HOL[date].name) : ''}　各同仁的工作日誌與完成狀況</p></div>
       <div class="row noprint"><a class="icon-btn" href="#/boss?d=${addDays(date, -1)}" aria-label="前一天">‹</a><input type="date" value="${date}" data-ch="bossDate" aria-label="選擇日期"><a class="icon-btn" href="#/boss?d=${addDays(date, 1)}" aria-label="後一天">›</a>${date !== t ? `<a class="btn sm" href="#/boss">今天</a>` : ''}<button class="btn sm" data-act="print">列印</button></div></div>
     ${modeNotice()}
     <div class="board">${cards}</div>
-    <div class="page-head"><div><h1 style="font-size:21px">未來兩週的重要期程</h1><p>${md(date)} – ${md(to)}，所有人進行中的專案</p></div></div>
-    ${upcoming}
+    <p class="muted small noprint" style="margin-top:18px">要看未來兩週每個人的工作安排與重要期程，請到上方的「工作期程表」。</p>
   </main>`;
 }
 function viewBossStaff(sid, sub, d, q) {
   const st = staffOf(sid);
-  const head = (active) => `<div class="page-head"><div><h1>${esc(st.name)}</h1><p>主管檢視（唯讀，可留下回饋）</p></div>
+  const head = (active) => `<a class="backlink noprint" href="#/boss">‹ 全員總覽</a><div class="page-head"><div><h1>${esc(st.name)}</h1><p>主管檢視（唯讀，可留下回饋）</p></div>
     <div class="seg noprint" role="tablist"><a role="tab" class="${active === 'overview' ? 'on' : ''}" href="#/boss/${sid}/overview">綜合檢視</a><a role="tab" class="${active === 'log' ? 'on' : ''}" href="#/boss/${sid}/log">工作日誌</a></div></div>`;
   if (sub === 'overview') return topbar({ mode: 'boss', sid }) + `<main>${head('overview')}${overviewHTML(sid, q, true)}</main>`;
   const date = logDateFrom(d);
