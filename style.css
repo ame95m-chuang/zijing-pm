@@ -609,3 +609,18 @@ main.wide{max-width:none}
 .att-legend>span{display:inline-flex;align-items:center;gap:5px}
 @media print{.att-wrap{overflow:visible}.att-grid{font-size:10px}.att-grid thead th{min-width:0}}
 .att-grid thead th.who{font-size:12px;color:var(--ink2);vertical-align:bottom}
+
+/* ---------- Google 日曆匯入 ---------- */
+.cal-blk{border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:8px;margin-bottom:12px;background:var(--sheet)}
+.cal-blk.off{opacity:.55}
+.cal-blk-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.cal-blk-h .chk{font-size:15px}
+.cal-blk-h .mini{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2)}
+.cal-blk-h .mini input{width:110px;padding:3px 6px}
+.cal-blk-h .mini select{padding:3px 6px}
+.imp-table tr.mute td{color:var(--ink3)}
+.imp-table tr.del td{background:color-mix(in srgb,var(--seal) 8%,#fff);text-decoration:line-through;text-decoration-color:var(--seal)}
+.imp-table tr.del td.st{text-decoration:none;color:var(--seal);font-weight:700}
+.cell-extra{display:flex;align-items:center;gap:6px;width:100%;text-align:left;margin-top:4px;padding:4px 8px;border:0;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 10%,#fff);border-radius:4px;font-size:13px;cursor:pointer;color:var(--ink)}
+.cell-extra:hover{background:color-mix(in srgb,var(--c) 18%,#fff)}
+.imp.filemode .imp-or,.imp.filemode .imp-text{display:none}

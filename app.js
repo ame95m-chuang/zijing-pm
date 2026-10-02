@@ -910,7 +910,8 @@ function projectHTML(sid, p, q) {
   // rows
   const from = cur < RANGE().start ? RANGE().start : cur;
   const endM = monthEnd(cur); const to = endM > RANGE().end ? RANGE().end : endM;
-  const own = {}; ms.forEach(m => { own[m.date + '|' + m.side] = m; });
+  const own = {}, extra = {};
+  ms.forEach(m => { const k = m.date + '|' + m.side; if (!own[k]) own[k] = m; else (extra[k] = extra[k] || []).push(m); });  // 同一格有多筆時，第一筆可直接編輯，其餘列在下方
   // 期間延續提示
   const contMap = {};
   doc.milestones.filter(m => m.projectId === p.id && m.endDate && m.endDate > m.date && (m.text || '').trim()).forEach(m => {
@@ -927,7 +928,7 @@ function projectHTML(sid, p, q) {
       const tags = m && (m.endDate || m.tentative || m.note) ? `<div class="cell-tags">${m.endDate ? `<span class="tag">期間至 ${mdw(m.endDate)}</span>` : ''}${m.tentative ? '<span class="tag tent">待確認</span>' : ''}${m.note ? `<span>${esc(m.note)}</span>` : ''}</div>` : '';
       return `<td class="cell" data-side="${side}">${conts}<div class="cell-edit ${m && m.text.trim() ? 'filled' : ''} ${m && m.tentative ? 'tent' : ''}" style="--c:${esc(p.color)}">
         <textarea rows="1" data-auto data-in="cell" data-ch="cellDone" data-date="${d}" data-side="${side}" aria-label="${md(d)} ${SIDE_NAME[side]}">${esc(m ? m.text : '')}</textarea>
-        <button class="cell-more" data-act="cellMore" data-date="${d}" data-side="${side}" title="期間、待確認、備註" aria-label="${md(d)} ${SIDE_NAME[side]} 詳細設定">⋯</button></div>${tags}</td>`;
+        <button class="cell-more" data-act="cellMore" data-date="${d}" data-side="${side}" title="期間、待確認、備註" aria-label="${md(d)} ${SIDE_NAME[side]} 詳細設定">⋯</button></div>${tags}${(extra[d + '|' + side] || []).map(x => `<button class="cell-extra" style="--c:${esc(p.color)}" data-act="msEdit" data-mid="${x.id}" title="點一下編輯">${esc(x.text.split('\n')[0])}${x.endDate ? `<span class="tag">至 ${md(x.endDate)}</span>` : ''}</button>`).join('')}</td>`;
     };
     rows += `<tr class="${cls}" data-date="${d}"><td class="c-date">${md(d)}</td><td class="c-dow">${WEEK[dowOf(d)]}</td><td class="c-hol">${h ? esc(h.name) : ''}</td>${cell('ours')}${cell('client')}</tr>`;
   }
@@ -1013,7 +1014,7 @@ function milestoneDialog(sid, opts) {
   const pid = m ? m.projectId : opts.pid;
   const p = byId(doc.projects, pid);
   const R = RANGE();
-  const body = `<p class="muted small" style="margin:0 0 12px">${esc(p.code || '')} ${esc(p.name)}</p>
+  const body = `<p class="muted small" style="margin:0 0 12px">${esc(p.code || '')} ${esc(p.name)}${m && m.src && m.src.startsWith('ics:') ? `<br><span class="warn-text">這筆來自 Google 日曆「${esc(m.src.split(':')[1])}」，重新上傳日曆檔時會以日曆內容為準。</span>` : ''}</p>
     <div class="row" style="align-items:flex-start">
       <label class="field" style="flex:1"><span>日期</span><input type="date" name="date" value="${m ? m.date : opts.date || todayStr()}" min="${R.start}" max="${R.end}" required></label>
       <label class="field" style="flex:1"><span>類別</span><select name="side"><option value="ours" ${(m ? m.side : opts.side) !== 'client' ? 'selected' : ''}>紫晶進度</option><option value="client" ${(m ? m.side : opts.side) === 'client' ? 'selected' : ''}>單位進度</option></select></label>
@@ -1653,7 +1654,7 @@ function parsePaste(text) {
 function importDialog(sid, presetPid) {
   const doc = D(sid);
   const own = sortedProjects(doc, true).filter(p => !p.link);
-  const st = { json: null, jsonName: '' };
+  const st = { json: null, jsonName: '', cal: null, calName: '' };
   const usedColors = new Set(doc.projects.map(x => x.color));
   const folder = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h4.2l2 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
   const sel = presetPid && own.some(p => p.id === presetPid) ? presetPid : (own[0] ? own[0].id : '');
@@ -1669,7 +1670,7 @@ function importDialog(sid, presetPid) {
         <label class="field" style="width:120px"><span>簡稱（2～4 字）</span><input type="text" name="short" maxlength="4" placeholder="例如：土文館"></label>
       </div>
     </div>
-    <label class="imp-drop" id="imp-drop">${folder}<span>選擇 JSON 檔案</span><small>專案匯入檔，可一次匯入多個專案</small><input type="file" accept=".json,application/json" hidden></label>
+    <label class="imp-drop" id="imp-drop">${folder}<span>選擇檔案</span><small>Google 日曆匯出的 .zip／.ics（直接上傳，不用解壓縮），或專案匯入檔 .json</small><input type="file" accept=".zip,.ics,.json,application/zip,text/calendar,application/json" hidden></label>
     <div class="imp-or"><span>或貼上文字</span></div>
     <textarea class="imp-text" name="paste" rows="6" spellcheck="false" placeholder="日期, 紫晶, 業主&#10;10/01, 1校提供,&#10;10/05, , 回復校稿&#10;10/20, 2校提供, 回復2校修改&#10;&#10;也可以直接從 Excel 複製「日期／紫晶進度／單位進度」幾欄貼上"></textarea>
     <div class="imp-preview" id="imp-preview" aria-live="polite"></div>
@@ -1681,9 +1682,20 @@ function importDialog(sid, presetPid) {
   };
   const paint = bg => {
     const box = bg.querySelector('#imp-preview');
+    bg.querySelector('.imp').classList.toggle('filemode', !!(st.cal || st.json));  // 選了檔案就收起貼上文字區
     const isNew = (bg.querySelector('[name=tgt]:checked') || {}).value === 'new';
     bg.querySelector('.imp-new').classList.toggle('on', isNew);
     bg.querySelector('[name=pid]').disabled = isNew || !own.length;
+    if (st.cal) {
+      const { pid } = targetInfo(bg);
+      box.innerHTML = `<div class="imp-sum">已選擇日曆檔 <b>${esc(st.calName)}</b>：${st.cal.length} 個日曆。重新上傳同一份日曆時，改過的行程會更新、刪掉的會移除，不會重複。 <button type="button" class="link-btn" data-clear>改用貼上文字</button></div>${calPreviewHTML(doc, pid, st.cal)}`;
+      bg.querySelector('.imp-text').disabled = true;
+      box.querySelector('[data-clear]').onclick = () => { st.cal = null; bg.querySelector('.imp-text').disabled = false; paint(bg); };
+      box.querySelectorAll('[data-cal-on]').forEach(el => el.addEventListener('change', () => { st.cal[+el.dataset.calOn].on = el.checked; paint(bg); }));
+      box.querySelectorAll('[data-cal-side]').forEach(el => el.addEventListener('change', () => { st.cal[+el.dataset.calSide].side = el.value; paint(bg); }));
+      box.querySelectorAll('[data-cal-tag]').forEach(el => el.addEventListener('change', () => { st.cal[+el.dataset.calTag].tag = el.value.trim() || st.cal[+el.dataset.calTag].name; paint(bg); }));
+      return;
+    }
     if (st.json) {
       const exists = new Set(doc.projects.map(p => p.code));
       const items = st.json.map(x => `<li class="${exists.has(x.code) ? 'skip' : ''}"><b>${esc(x.code)}</b> ${esc(x.name)}${x.short ? `（${esc(x.short)}）` : ''}<span class="muted">　${x.ms.length} 筆期程${exists.has(x.code) ? '・已存在，略過' : ''}</span></li>`).join('');
@@ -1718,22 +1730,36 @@ function importDialog(sid, presetPid) {
       ${P.rows.length ? `<div class="imp-table"><table class="plain"><thead><tr><th>日期</th><th>紫晶進度</th><th>單位進度</th><th>狀態</th></tr></thead><tbody>${rowsHTML}</tbody></table></div>` : ''}`;
   };
 
+  const resolveTarget = bg => {
+    let { pid } = targetInfo(bg);
+    if (pid) return { pid, p: byId(doc.projects, pid) };
+    const f = n => bg.querySelector(`[name=${n}]`);
+    const name = f('name').value.trim();
+    if (!name) { f('name').focus(); f('name').style.borderColor = 'var(--seal)'; toast('請填寫新專案的名稱', true); return null; }
+    const short = f('short').value.trim();
+    if (short && Array.from(short).length < 2) { f('short').focus(); f('short').style.borderColor = 'var(--seal)'; toast('簡稱請填 2～4 個字', true); return null; }
+    const color = PALETTE.find(c => !usedColors.has(c)) || PALETTE[doc.projects.length % PALETTE.length];
+    const p = { id: uid(), code: f('code').value.trim(), name, short, client: '', color, status: 'active', note: '', created: now(), u: now() };
+    doc.projects.push(p);
+    return { pid: p.id, p };
+  };
   const doImport = bg => {
     if (st.json) { importSeed(sid, st.json); render({ keepScroll: true }); return true; }
+    if (st.cal) {
+      if (!st.cal.some(c => c.on)) { toast('請至少勾選一個日曆', true); return false; }
+      const tgt = resolveTarget(bg); if (!tgt) return false;
+      const r = applyCalendars(doc, tgt.pid, st.cal);
+      touchStaff(sid);
+      toast(`已從 Google 日曆匯入到「${shortOf(tgt.p)}」：新增 ${r.add} 筆${r.upd ? `、更新 ${r.upd} 筆` : ''}${r.del ? `、移除 ${r.del} 筆` : ''}`);
+      const first = st.cal.filter(c => c.on).flatMap(c => c.occ).map(o => o.date).filter(d => d >= RANGE().start && d <= RANGE().end).sort()[0];
+      go(`#/s/${sid}/plan/p/${tgt.pid}${first ? '?m=' + first.slice(0, 7) : ''}`);
+      return true;
+    }
     const P = parsePaste(bg.querySelector('.imp-text').value);
     const rows = P.rows.filter(r => !r.err);
     if (!rows.length) { toast(P.rows.length ? '沒有可以匯入的資料，請檢查標紅的行' : '請選擇 JSON 檔案或貼上文字', true); return false; }
-    let { pid } = targetInfo(bg), p;
-    const f = n => bg.querySelector(`[name=${n}]`);
-    if (!pid) {
-      const name = f('name').value.trim();
-      if (!name) { f('name').focus(); f('name').style.borderColor = 'var(--seal)'; toast('請填寫新專案的名稱', true); return false; }
-      const short = f('short').value.trim();
-      if (short && Array.from(short).length < 2) { f('short').focus(); f('short').style.borderColor = 'var(--seal)'; toast('簡稱請填 2～4 個字', true); return false; }
-      const color = PALETTE.find(c => !usedColors.has(c)) || PALETTE[doc.projects.length % PALETTE.length];
-      p = { id: uid(), code: f('code').value.trim(), name, short, client: '', color, status: 'active', note: '', created: now(), u: now() };
-      doc.projects.push(p); pid = p.id;
-    } else p = byId(doc.projects, pid);
+    const tgt = resolveTarget(bg); if (!tgt) return false;
+    const { pid, p } = tgt;
     let added = 0, appended = 0, same = 0;
     rows.forEach(r => [['ours', r.ours], ['client', r.client]].forEach(([side, txt]) => {
       if (!txt) return;
@@ -1762,14 +1788,242 @@ function importDialog(sid, presetPid) {
       const file = bg.querySelector('#imp-drop input');
       file.addEventListener('change', async () => {
         const fl = file.files[0]; file.value = ''; if (!fl) return;
+        if (/\.(zip|ics)$/i.test(fl.name)) {
+          try { st.cal = await readCalendarFile(fl); st.calName = fl.name; st.json = null; bg.querySelector('#imp-target').classList.remove('dim'); paint(bg); }
+          catch (e) { toast(e.message || '讀不到這個日曆檔', true); }
+          return;
+        }
         let b = null; try { b = JSON.parse(await fl.text()); } catch (e) { b = null; }
         const list = b && b.app === 'zijing-pm' && b.type === 'projects' && Array.isArray(b.projects) ? b.projects.filter(x => x && x.code && Array.isArray(x.ms)) : null;
-        if (!list || !list.length) { toast('這不是專案匯入檔（JSON）', true); return; }
-        st.json = list; st.jsonName = fl.name; paint(bg);
+        if (!list || !list.length) { toast('請選擇 Google 日曆的 .zip／.ics，或專案匯入檔 .json', true); return; }
+        st.cal = null; st.json = list; st.jsonName = fl.name; paint(bg);
       });
       paint(bg);
     },
   });
+}
+
+/* =====================================================================
+ * Google 日曆匯入：直接讀取 Google 日曆「匯出日曆」下載的 .zip（或 .ics）
+ * 每筆期程記住來源（日曆＋行程），重新上傳時會更新、刪除對應的期程，不會重複。
+ * ===================================================================== */
+
+/** 解開 .zip，回傳 [{ name, bytes }]（只支援一般的 stored / deflate 壓縮） */
+async function unzipFiles(buf) {
+  const dv = new DataView(buf), len = buf.byteLength;
+  let eocd = -1;
+  for (let i = len - 22; i >= Math.max(0, len - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('這不是有效的 zip 檔');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(new Uint8Array(buf, p + 46, nlen));
+    p += 46 + nlen + elen + clen;
+    if (name.endsWith('/')) continue;
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    const data = new Uint8Array(buf, start, csize);
+    let bytes;
+    if (method === 0) bytes = data;
+    else if (method === 8) {
+      if (typeof DecompressionStream === 'undefined') throw new Error('這個瀏覽器無法直接讀取 zip，請改用最新版 Chrome／Edge，或先解壓縮後選擇 .ics 檔');
+      bytes = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    } else continue;
+    out.push({ name, bytes });
+  }
+  return out;
+}
+
+function icsTime(v, params) {
+  v = String(v || '').trim(); let m;
+  if ((params && params.VALUE === 'DATE') || /^\d{8}$/.test(v)) {
+    m = v.match(/^(\d{4})(\d{2})(\d{2})/);
+    return m ? { date: `${m[1]}-${m[2]}-${m[3]}`, time: '', allDay: true } : null;
+  }
+  m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  if (!m) return null;
+  if (m[7]) {  // UTC → 這台電腦的時區
+    const d = new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]));
+    return { date: ymd(d), time: pad2(d.getHours()) + ':' + pad2(d.getMinutes()), allDay: false };
+  }
+  return { date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}`, allDay: false };
+}
+const icsUnesc = v => v.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+
+/** 解析 .ics 文字 → { name, events } */
+function icsParse(text, fileName) {
+  const lines = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const cal = { name: '', events: [] }, stack = [];
+  let ev = null;
+  for (const raw of lines) {
+    const ci = raw.indexOf(':'); if (ci < 0) continue;
+    const left = raw.slice(0, ci), value = raw.slice(ci + 1);
+    const [nm, ...ps] = left.split(';'); const N = nm.toUpperCase();
+    const params = {}; ps.forEach(x => { const k = x.indexOf('='); if (k > 0) params[x.slice(0, k).toUpperCase()] = x.slice(k + 1).replace(/^"|"$/g, ''); });
+    if (N === 'BEGIN') { stack.push(value.trim().toUpperCase()); if (value.trim().toUpperCase() === 'VEVENT') ev = { exdates: [] }; continue; }
+    if (N === 'END') { const v = stack.pop(); if (v === 'VEVENT' && ev) { cal.events.push(ev); ev = null; } continue; }
+    const top = stack[stack.length - 1];
+    if (ev && top === 'VEVENT') {
+      if (N === 'UID') ev.uid = value.trim();
+      else if (N === 'SUMMARY') ev.summary = icsUnesc(value).trim();
+      else if (N === 'DESCRIPTION') ev.desc = icsUnesc(value).replace(/<[^>]+>/g, ' ').trim();
+      else if (N === 'LOCATION') ev.loc = icsUnesc(value).trim();
+      else if (N === 'DTSTART') ev.start = icsTime(value, params);
+      else if (N === 'DTEND') ev.end = icsTime(value, params);
+      else if (N === 'RRULE') ev.rrule = value.trim();
+      else if (N === 'EXDATE') value.split(',').forEach(v => { const t = icsTime(v, params); if (t) ev.exdates.push(t.date); });
+      else if (N === 'RECURRENCE-ID') ev.recur = icsTime(value, params);
+      else if (N === 'STATUS') ev.status = value.trim().toUpperCase();
+    } else if (top === 'VCALENDAR' && N === 'X-WR-CALNAME') cal.name = icsUnesc(value).trim();
+  }
+  if (!cal.name) cal.name = String(fileName || '日曆').replace(/^.*\//, '').replace(/\.ics$/i, '').replace(/_[^_]*@[^@]*$/, '').trim() || '日曆';
+  return cal;
+}
+
+/** 依 RRULE 展開重複行程的日期（支援每日／每週／每月／每年，含 INTERVAL、COUNT、UNTIL、BYDAY、BYMONTHDAY） */
+function rruleDates(start, rule, limitEnd) {
+  const r = {}; rule.split(';').forEach(x => { const k = x.indexOf('='); if (k > 0) r[x.slice(0, k).toUpperCase()] = x.slice(k + 1); });
+  const interval = Math.max(1, +r.INTERVAL || 1), count = r.COUNT ? +r.COUNT : Infinity;
+  let until = limitEnd;
+  if (r.UNTIL) { const u = icsTime(r.UNTIL, {}); if (u && u.date < until) until = u.date; }
+  const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  const byday = (r.BYDAY || '').split(',').filter(Boolean), bymd = (r.BYMONTHDAY || '').split(',').filter(Boolean).map(Number);
+  const out = []; let n = 0;
+  const push = d => { if (d < start) return true; if (d > until || n >= count || out.length >= 800) return false; out.push(d); n++; return true; };
+  if (r.FREQ === 'DAILY') { for (let d = start, g = 0; g < 3000; d = addDays(d, interval), g++) if (!push(d)) break; }
+  else if (r.FREQ === 'WEEKLY') {
+    const days = byday.length ? byday.map(x => DOW.indexOf(x.slice(-2))).filter(x => x >= 0) : [dowOf(start)];
+    let wk = addDays(start, -((dowOf(start) + 6) % 7));
+    outer: for (let g = 0; g < 600; g++, wk = addDays(wk, 7 * interval)) {
+      for (const d of days.map(dw => addDays(wk, (dw + 6) % 7)).sort()) if (!push(d)) break outer;
+    }
+  } else if (r.FREQ === 'MONTHLY') {
+    for (let g = 0, mo = start.slice(0, 7); g < 400; g++, mo = addMonths(mo + '-01', interval).slice(0, 7)) {
+      if (mo + '-01' > until) break;
+      const ds = [];
+      if (byday.length) byday.forEach(x => {
+        const mm = x.match(/^([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)$/); if (!mm) return;
+        const dw = DOW.indexOf(mm[2]), nth = mm[1] ? +mm[1] : 0, all = [];
+        for (let d = mo + '-01'; d.slice(0, 7) === mo; d = addDays(d, 1)) if (dowOf(d) === dw) all.push(d);
+        if (!nth) ds.push(...all); else { const pick = nth > 0 ? all[nth - 1] : all[all.length + nth]; if (pick) ds.push(pick); }
+      });
+      else (bymd.length ? bymd : [+start.slice(8)]).forEach(dn => { const dt = new Date(+mo.slice(0, 4), +mo.slice(5, 7) - 1, dn); if (dt.getMonth() === +mo.slice(5, 7) - 1) ds.push(ymd(dt)); });
+      let stop = false; for (const d of ds.sort()) if (!push(d)) { stop = true; break; }
+      if (stop) break;
+    }
+  } else if (r.FREQ === 'YEARLY') {
+    for (let y = +start.slice(0, 4), g = 0; g < 60; y += interval, g++) {
+      const dt = new Date(y, +start.slice(5, 7) - 1, +start.slice(8));
+      if (dt.getMonth() !== +start.slice(5, 7) - 1) continue;
+      if (!push(ymd(dt))) break;
+    }
+  } else out.push(start);
+  return out;
+}
+
+/** 日曆 → 每一次發生的行程 [{ key, date, endDate, time, summary, loc, desc }] */
+function icsOccurrences(cal) {
+  const R = RANGE();
+  const masters = cal.events.filter(e => !e.recur), overrides = cal.events.filter(e => e.recur && e.recur.date);
+  const ov = {}; overrides.forEach(o => { ov[o.uid + '|' + o.recur.date] = o; });
+  const out = [];
+  const emit = (ev, orig) => {
+    if (ev.status === 'CANCELLED' || !ev.start) return;
+    let end = '';
+    if (ev.end) { let ed = ev.end.date; if (ev.end.allDay || (ev.end.time === '00:00' && ed > ev.start.date)) ed = addDays(ed, -1); if (ed > ev.start.date) end = ed; }
+    // 單次行程只用 UID 辨識（改日期也算同一筆）；重複行程用 UID＋原本的那一天
+    out.push({ key: (ev.uid || ev.summary || '') + (orig ? '|' + orig : ''), date: ev.start.date, endDate: end, time: ev.start.allDay ? '' : ev.start.time, summary: ev.summary || '（無標題）', loc: ev.loc || '', desc: ev.desc || '' });
+  };
+  masters.forEach(ev => {
+    if (!ev.start) return;
+    if (!ev.rrule) { emit(ev, ''); return; }
+    const dates = rruleDates(ev.start.date, ev.rrule, R.end);
+    dates.forEach(d => {
+      if (ev.exdates.includes(d)) return;
+      if (ov[ev.uid + '|' + d]) { emit(ov[ev.uid + '|' + d], d); return; }
+      if (d === ev.start.date) { emit(ev, d); return; }
+      const delta = Math.round((toDate(d) - toDate(ev.start.date)) / 86400000);
+      emit(Object.assign({}, ev, { start: Object.assign({}, ev.start, { date: d }), end: ev.end ? Object.assign({}, ev.end, { date: addDays(ev.end.date, delta) }) : null }), d);
+    });
+  });
+  overrides.forEach(o => { if (!masters.some(m => m.uid === o.uid)) emit(o, o.recur.date); });
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+}
+
+/** 讀取使用者選的檔案（.zip 或 .ics）→ [{ id, name, tag, side, on, occ }] */
+async function readCalendarFile(file) {
+  const lower = file.name.toLowerCase();
+  let parts = [];
+  if (lower.endsWith('.zip')) {
+    const files = await unzipFiles(await file.arrayBuffer());
+    parts = files.filter(f => /\.ics$/i.test(f.name)).map(f => ({ name: f.name, text: new TextDecoder().decode(f.bytes) }));
+    if (!parts.length) throw new Error('zip 檔裡沒有 .ics 日曆檔');
+  } else parts = [{ name: file.name, text: await file.text() }];
+  const cals = parts.map(p => icsParse(p.text, p.name)).filter(c => c.events.length);
+  if (!cals.length) throw new Error('日曆檔裡沒有任何行程');
+  return cals.map(c => ({ id: c.name, name: c.name, tag: c.name, side: 'ours', on: true, occ: icsOccurrences(c) }));
+}
+
+/** 單一行程要寫成的期程內容 */
+function calMilestone(c, o) {
+  const text = `〔${c.tag || c.name}〕${o.time ? o.time + ' ' : ''}${o.summary}`;
+  const note = [o.loc ? '地點：' + o.loc : '', o.desc.replace(/\s+/g, ' ').slice(0, 160)].filter(Boolean).join('｜').slice(0, 200);
+  return { date: o.date, endDate: o.endDate || '', side: c.side, text, note, src: `ics:${c.id}:${o.key}` };
+}
+
+/** 比對目標專案現有的期程，算出新增／更新／不變／移除 */
+function calPlan(doc, pid, c) {
+  const R = RANGE();
+  const prefix = `ics:${c.id}:`;
+  const existing = new Map((pid ? doc.milestones.filter(m => m.projectId === pid && m.src && m.src.startsWith(prefix)) : []).map(m => [m.src, m]));
+  const rows = [], keep = new Set();
+  c.occ.forEach(o => {
+    const inRange = (o.endDate || o.date) >= R.start && o.date <= R.end;
+    const want = calMilestone(c, o);
+    if (!inRange) { rows.push({ o, want, st: 'out' }); return; }
+    const ex = existing.get(want.src);
+    if (ex) keep.add(want.src);
+    const same = ex && ex.date === want.date && (ex.endDate || '') === want.endDate && ex.side === want.side && ex.text === want.text && (ex.note || '') === want.note;
+    rows.push({ o, want, ex, st: !ex ? 'add' : same ? 'same' : 'upd' });
+  });
+  const removed = Array.from(existing.values()).filter(m => !keep.has(m.src));
+  return { rows, removed };
+}
+
+function calPreviewHTML(doc, pid, cals) {
+  const ST = { add: '新增', upd: '更新', same: '不變', out: '超出可填寫期間，略過' };
+  return cals.map((c, ci) => {
+    const P = calPlan(doc, pid, c);
+    const n = k => P.rows.filter(r => r.st === k).length;
+    const list = P.rows.filter(r => r.st !== 'same').slice(0, 300).map(r => `<tr class="${r.st === 'out' ? 'mute' : ''}"><td class="nowrap">${mdw(r.o.date)}${r.o.endDate ? `–${md(r.o.endDate)}` : ''}${r.o.date.slice(0, 4) !== todayStr().slice(0, 4) ? `<small class="muted"> ${r.o.date.slice(0, 4)}</small>` : ''}</td><td>${esc(r.want.text)}</td><td class="st">${ST[r.st]}</td></tr>`).join('')
+      + P.removed.map(m => `<tr class="del"><td class="nowrap">${mdw(m.date)}</td><td>${esc(m.text)}</td><td class="st">日曆已刪除，將移除</td></tr>`).join('');
+    return `<div class="cal-blk ${c.on ? '' : 'off'}">
+      <div class="cal-blk-h">
+        <label class="chk"><input type="checkbox" data-cal-on="${ci}" ${c.on ? 'checked' : ''}> <b>${esc(c.name)}</b></label>
+        <label class="mini">放到 <select data-cal-side="${ci}"><option value="ours" ${c.side === 'ours' ? 'selected' : ''}>紫晶進度</option><option value="client" ${c.side === 'client' ? 'selected' : ''}>單位進度</option></select></label>
+        <label class="mini">標籤〔<input type="text" data-cal-tag="${ci}" value="${esc(c.tag)}" maxlength="10">〕</label>
+      </div>
+      <div class="imp-sum">共 ${c.occ.length} 筆行程：新增 <b>${n('add')}</b>、更新 <b>${n('upd')}</b>、不變 ${n('same')}${P.removed.length ? `、<span class="bad">移除 ${P.removed.length}</span>` : ''}${n('out') ? `、超出期間略過 ${n('out')}` : ''}</div>
+      ${list ? `<div class="imp-table"><table class="plain"><thead><tr><th>日期</th><th>期程內容</th><th>狀態</th></tr></thead><tbody>${list}</tbody></table></div>` : '<p class="muted small" style="margin:0">內容與系統相同，不需要更新。</p>'}
+    </div>`;
+  }).join('');
+}
+
+/** 寫入：新增、更新、移除 */
+function applyCalendars(doc, pid, cals) {
+  let add = 0, upd = 0, del = 0;
+  cals.filter(c => c.on).forEach(c => {
+    const P = calPlan(doc, pid, c);
+    P.rows.forEach(r => {
+      if (r.st === 'add') { doc.milestones.push(Object.assign({ id: uid(), projectId: pid, tentative: false, u: now() }, r.want)); add++; }
+      else if (r.st === 'upd') { Object.assign(r.ex, r.want, { u: now() }); upd++; }
+    });
+    P.removed.forEach(m => { delMilestone(doc, m); del++; });
+  });
+  return { add, upd, del };
 }
 
 /* =====================================================================
