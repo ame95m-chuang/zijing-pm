@@ -101,7 +101,7 @@ const S = {
   docs: {},              // sid -> {rev, data}
   fetchedAt: {},
   route: {},
-  ui: { showClosed: false, filters: {}, listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
+  ui: { showClosed: false, filters: {}, showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
   unlocked: JSON.parse(sessionStorage.getItem('zjpm.unlock') || '{}'),
 };
 const CFG = () => S.config.data;
@@ -258,6 +258,7 @@ function normalizeStaff(x) {
     if (!Array.isArray(L.tasks)) L.tasks = [];
     if (!L.auto || typeof L.auto !== 'object' || Array.isArray(L.auto)) L.auto = {};
     if (!L.hours || typeof L.hours !== 'object' || Array.isArray(L.hours)) L.hours = {};
+    if (L.notes != null && !Array.isArray(L.notes)) L.notes = [];
   });
   return out;
 }
@@ -277,6 +278,7 @@ function mergeStaff(a, b) {
   // 同一格出現兩筆時合併文字
   const seen = {};
   out.milestones = out.milestones.filter(m => {
+    if (m.src) return true;   // 由 Google 日曆匯入的期程，同一格可以有多筆，不合併
     const k = m.projectId + '|' + m.date + '|' + m.side;
     if (seen[k]) { if (m.text && !seen[k].text.includes(m.text)) seen[k].text += '\n' + m.text; out.deleted[m.id] = now(); return false; }
     seen[k] = m; return true;
@@ -287,6 +289,9 @@ function mergeStaff(a, b) {
     const bx = x && x.boss, by = y && y.boss;
     const bb = !bx ? by : !by ? bx : ((bx.at || 0) >= (by.at || 0) ? bx : by);
     if (bb) r.boss = clone(bb); else delete r.boss;
+    // 專案紀事逐則合併，避免兩台電腦同一天各自新增時遺失
+    const nx = (x && x.notes) || [], ny = (y && y.notes) || [];
+    if (nx.length || ny.length) r.notes = mergeArr(nx, ny);
     out.logs[d] = r;
   });
   return normalizeStaff(out);
@@ -401,6 +406,32 @@ function sortedProjects(doc, includeClosed = true) {
     .filter(p => includeClosed || p.status !== 'closed')
     .slice().sort((a, b) => (order[a.status] || 0) - (order[b.status] || 0) || String(a.code || '').localeCompare(String(b.code || ''), 'zh-Hant', { numeric: true }) || (a.created || 0) - (b.created || 0));
 }
+/* ---------- 專案紀事：記在撰寫人自己的工作日誌裡（logs[日期].notes），依 sid＋pid 指向專案 ---------- */
+/** 全部紀事 [{ n, author, date }]，新的在前；可指定專案 */
+function allNotes(ownerSid, pid) {
+  const out = [];
+  CFG().staff.forEach(st => {
+    const doc = S.docs[st.id] && S.docs[st.id].data; if (!doc) return;
+    Object.entries(doc.logs || {}).forEach(([date, L]) => (L.notes || []).forEach(n => {
+      if (!n || !(n.text || '').trim()) return;
+      if (ownerSid && (n.sid !== ownerSid || n.pid !== pid)) return;
+      out.push({ n, author: st, date });
+    }));
+  });
+  return out.sort((a, b) => (b.date + (b.n.at || 0)).localeCompare(a.date + (a.n.at || 0), 'en', { numeric: true }) || (b.n.at || 0) - (a.n.at || 0));
+}
+/** 期程進度：日期已經過去的期程數／全部期程數 */
+function scheduleProgress(ownerSid, pid) {
+  const t = todayStr();
+  const ms = (S.docs[ownerSid] ? D(ownerSid).milestones : []).filter(m => m.projectId === pid && (m.text || '').trim());
+  const dates = ms.map(m => m.date).sort();
+  const passed = ms.filter(m => m.date < t).length;
+  return { total: ms.length, passed, pct: ms.length ? Math.round(passed / ms.length * 100) : 0, first: dates[0] || '', last: dates[dates.length - 1] || '', ms };
+}
+/** 專案的負責人 sid（參與的專案會帶 link） */
+const ownerOf = (sid, p) => p && p.link ? p.link.sid : sid;
+const hm = ts => { const d = new Date(ts); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+
 /* ---------- 參與的專案（連結到其他人管理的專案，唯讀、即時連動） ---------- */
 const ROLE_NAME = { pm: '企劃編輯', design: '設計' };
 const roleOf = sid => { const s = staffOf(sid); return s && s.role === 'design' ? 'design' : 'pm'; };
@@ -615,7 +646,8 @@ function render(opts = {}) {
 function route(parts, q) {
   const [a, b, c, d] = parts;
   if (!a) { document.title = CFG().company + '｜專案管理'; return viewHome(); }
-  if (a === 'timeline') return viewTimeline(false, q);
+  if (a === 'timeline') return viewProjects(false, Object.assign({}, q, { view: 'timeline' }));
+  if (a === 'projects') return b && c ? viewCaseProject(false, b, c, q) : viewProjects(false, q);
   if (a === 'settings') { if (!bossOk()) return viewGate('boss', '#/settings'); document.title = '系統設定｜' + CFG().company; return viewSettings(); }
   if (a === 's') {
     const st = staffOf(b);
@@ -628,7 +660,8 @@ function route(parts, q) {
   if (a === 'boss') {
     if (!bossOk()) return viewGate('boss', location.hash);
     document.title = '主管檢視｜' + CFG().company;
-    if (b === 'timeline') return viewTimeline(true, q);
+    if (b === 'timeline') return viewProjects(true, Object.assign({}, q, { view: 'timeline' }));
+    if (b === 'projects') return c && d ? viewCaseProject(true, c, d, q) : viewProjects(true, q);
     if (b === 'attendance') return viewBossAttendance(q);
     if (b && staffOf(b) && S.docs[b]) return viewBossStaff(b, c || 'log', d, q);
     return viewBossBoard(q);
@@ -639,6 +672,7 @@ function bossOk() { return !CFG().bossPin || S.unlocked.__boss; }
 
 /* ---------------- top bar ---------------- */
 function topbar(ctx) {
+  S.ctxTop = ctx;   // 搜尋會依目前的檢視者決定連結
   const st = ctx.sid ? staffOf(ctx.sid) : null;
   let mid = '';
   if (ctx.mode === 'staff' && st) {
@@ -651,12 +685,12 @@ function topbar(ctx) {
     mid = `<div class="who boss">主管檢視</div>
       <nav class="tabs" aria-label="人員">
         <a class="${!ctx.sid && !ctx.tab ? 'on' : ''}" href="#/boss">全員總覽</a>
-        <a class="${ctx.tab === 'timeline' ? 'on' : ''}" href="#/boss/timeline">全案時間表</a>
+        <a class="${ctx.tab === 'projects' ? 'on' : ''}" href="#/boss/projects">專案總覽</a>
         <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
         ${CFG().staff.map(s => `<a class="${ctx.sid === s.id ? 'on' : ''}" href="#/boss/${s.id}">${esc(s.name)}</a>`).join('')}
       </nav>`;
-  } else if (ctx.mode === 'timeline') {
-    mid = `<div class="who">全案時間表</div>`;
+  } else if (ctx.mode === 'projects') {
+    mid = `<div class="who">專案總覽</div>`;
   } else if (ctx.mode === 'settings') {
     mid = `<div class="who">系統設定</div>`;
   }
@@ -665,7 +699,7 @@ function topbar(ctx) {
   return `<header class="top">
     <a class="brand" href="#/" title="回首頁">${ICON_GEM}<span class="brand-name">${esc(CFG().company)}</span><span class="brand-sub">專案管理</span></a>
     ${mid}
-    <div class="top-right">${modeBadge}<span id="savestate" class="savestate" aria-live="polite"></span>
+    <div class="top-right"><button class="search-btn" data-act="openSearch" title="搜尋專案、期程、紀事、工作日誌（Ctrl＋K）">${ICON_SEARCH}<span>搜尋</span><kbd>Ctrl K</kbd></button>${modeBadge}<span id="savestate" class="savestate" aria-live="polite"></span>
       ${ctx.mode ? `<a class="btn sm ghost" href="#/">切換人員</a>` : ''}</div>
   </header>`;
 }
@@ -691,31 +725,34 @@ function modeNotice() {
 }
 function viewHome() {
   const t = todayStr();
-  const cards = CFG().staff.map(st => {
+  const card = st => {
     const doc = S.docs[st.id] ? V(st.id) : emptyStaff();
     const act = doc.projects.filter(p => p.status !== 'closed').length;
     const todayMs = milestonesOn(doc, t).length;
     const L = doc.logs[t];
     const tasks = L ? L.tasks.filter(x => (x.text || '').trim()).length : 0;
     return `<article class="staff-card" style="--c:${esc(st.color)}">
-      <h2>${esc(st.name)}<span class="role-tag">${ROLE_NAME[st.role === 'design' ? 'design' : 'pm']}</span></h2>
+      <h2>${esc(st.name)}</h2>
       <div class="meta">${act ? `進行中專案 ${act} 個` : '尚未建立專案'}<br>今天有 ${todayMs} 項重要期程${tasks ? `、${tasks} 項自排工作` : ''}</div>
       <div class="row"><a class="btn" href="#/s/${st.id}/plan">專案期程</a><a class="btn primary" href="#/s/${st.id}/log">工作日誌</a></div>
     </article>`;
-  }).join('');
+  };
+  const col = (role, name) => { const list = CFG().staff.filter(s => (s.role === 'design' ? 'design' : 'pm') === role); return `<div class="staff-col"><h3>${name}<small>${list.length} 人</small></h3>${list.map(card).join('') || '<p class="muted small">尚未設定這個職務的人員。</p>'}</div>`; };
+  const cards = CFG().staff.length ? `<div class="staff-cols">${col('pm', '企劃編輯')}${col('design', '設計')}</div>` : '';
   return topbar({}) + `<main class="home">
-    <div>${tearOff(t)}</div>
+    <div class="home-cal">${tearOff(t)}
+      <nav class="home-nav" aria-label="其他功能">
+        <a class="btn primary" href="#/boss">主管檢視</a>
+        <a class="btn" href="#/projects">專案總覽</a>
+        <a class="btn" href="#/settings">系統設定</a>
+      </nav>
+      <p class="home-range">可填寫期間<br>${esc(RANGE().start.replace(/-/g, '/'))} 至 ${esc(RANGE().end.replace(/-/g, '/'))}</p>
+    </div>
     <section>
       ${modeNotice()}
       <h1>請選擇你的名字</h1>
       <p class="lead">專案期程用來排定各專案的重要日期；工作日誌會自動帶入當天的期程，再加上自己安排的工作。</p>
-      <div class="staff-list">${cards || '<div class="empty">尚未建立人員，請到系統設定新增。</div>'}</div>
-      <div class="home-foot">
-        <a class="btn primary" href="#/boss">主管檢視</a>
-        <a class="btn" href="#/timeline">全案時間表</a>
-        <a class="btn ghost" href="#/settings">系統設定</a>
-        <span class="muted small" style="margin-left:auto">可填寫期間 ${esc(RANGE().start.replace(/-/g, '/'))} 至 ${esc(RANGE().end.replace(/-/g, '/'))}</span>
-      </div>
+      ${cards || '<div class="empty">尚未建立人員，請到系統設定新增。</div>'}
     </section>
   </main>`;
 }
@@ -767,7 +804,7 @@ function viewPlan(sid, sub, arg, q) {
   const own = projects.filter(p => !p.link), linked = projects.filter(p => p.link);
   const vis = list => list.filter(p => S.ui.showClosed || p.status !== 'closed' || (sub === 'p' && p.id === arg));
   const closedCount = projects.filter(p => p.status === 'closed').length;
-  const item = p => `<li><a class="proj-link ${p.status || 'active'} ${sub === 'p' && arg === p.id ? 'on' : ''}" style="--c:${esc(p.color)}" href="#/s/${sid}/plan/p/${p.id}" title="${esc(p.name)}${p.link ? `（由${esc(p.link.name)}管理）` : ''}">
+  const item = p => `<li data-q="${esc([p.code, p.name, p.short, p.client, p.link ? p.link.name : ''].join(' ').toLowerCase())}"><a class="proj-link ${p.status || 'active'} ${sub === 'p' && arg === p.id ? 'on' : ''}" style="--c:${esc(p.color)}" href="#/s/${sid}/plan/p/${p.id}" title="${esc(p.name)}${p.link ? `（由${esc(p.link.name)}管理）` : ''}">
       <span class="code">${esc(p.code || '')}</span><span class="nm">${esc(p.name)}</span>${p.link ? `<span class="owner">${esc(p.link.name)}</span>` : ''}</a></li>`;
   const dangling = danglingLinks(sid).length;
   const isDesign = roleOf(sid) === 'design';
@@ -781,6 +818,7 @@ function viewPlan(sid, sub, arg, q) {
     <button class="btn ${isDesign ? 'primary' : ''}" data-act="linkProjects">＋ 加入企劃編輯的專案</button>`;
   const side = `<aside class="side" aria-label="專案清單">
     <a class="side-item ${sub === 'overview' ? 'on' : ''}" href="#/s/${sid}/plan/overview">綜合檢視</a>
+    ${projects.length > 8 ? `<input class="side-filter" type="search" data-in="sideFilter" placeholder="篩選專案…" aria-label="篩選專案清單">` : ''}
     ${isDesign ? linkBlock + '<div class="side-sep"></div>' + ownBlock : ownBlock + '<div class="side-sep"></div>' + linkBlock}
     ${closedCount ? `<label class="chk"><input type="checkbox" data-ch="toggleClosed" ${S.ui.showClosed ? 'checked' : ''}> 顯示已結案（${closedCount}）</label>` : ''}
   </aside>`;
@@ -789,7 +827,10 @@ function viewPlan(sid, sub, arg, q) {
   else if (sub === 'p') {
     const p = byId(doc.projects, arg);
     if (!p) { go(`#/s/${sid}/plan`, true); return null; }
-    main = p.link ? linkedProjectHTML(sid, p) : projectHTML(sid, p, q);
+    const tab = q.mode === 'list' ? 'list' : (q.tab === 'grid' || q.m || q.focus) ? (p.link ? 'list' : 'grid') : 'home';
+    main = projTabs(sid, p, tab) + (tab === 'home'
+      ? projectHomeHTML(ownerOf(sid, p), p, { sid, canEdit: !p.link, allNotes: q.notes === 'all' })
+      : p.link ? linkedProjectHTML(sid, p) : projectHTML(sid, p, q));
   } else {
     main = `<div class="empty"><h3>還沒有任何專案</h3>
       <p>${isDesign ? '可以直接加入企劃編輯已建立的專案，期程會自動同步；' : '先新增一個專案，就能依日期填寫它的重要期程；'}<br>也可以自己新增專案，或用「匯入專案期程」貼上整理好的期程。</p>
@@ -887,7 +928,7 @@ function projectHTML(sid, p, q) {
     <div class="proj-meta">${p.client ? `<span>委託單位 <b>${esc(p.client)}</b></span>` : ''}<span>簡稱 <b>${esc(shortOf(p))}</b>${p.short ? '' : '（未設定，可在「編輯專案」填寫）'}</span><span>已填期程 <b>${ms.length}</b> 筆</span>
       ${next ? `<span>下一個期程 <b>${mdw(next.date)} ${esc(next.text.split('\n')[0])}</b></span>` : ''}${(() => { const ps = participantsOf(sid, p.id); return ps.length ? `<span>參與：<b>${esc(ps.map(x => x.name).join('、'))}</b>（修改期程會同步給他們）</span>` : ''; })()}${p.note ? `<span>${esc(p.note)}</span>` : ''}</div>
   </header>`;
-  const seg = `<div class="seg" role="tablist"><a role="tab" class="${mode === 'month' ? 'on' : ''}" href="#/s/${sid}/plan/p/${p.id}${qs({ m: q.m })}">逐日填寫</a><a role="tab" class="${mode === 'list' ? 'on' : ''}" href="#/s/${sid}/plan/p/${p.id}?mode=list">期程清單</a></div>`;
+  const seg = '';   // 改由上方的「首頁｜逐日填寫｜期程清單」分頁切換
   if (mode === 'list') return head + listModeHTML(sid, p, ms, seg);
 
   const months = monthsInRange();
@@ -1069,6 +1110,13 @@ function overviewHTML(sid, q, readOnly) {
   const showProj = sortedProjects(doc, true).filter(p => p.status !== 'closed' || doc.milestones.some(m => m.projectId === p.id));
   const filter = (m, p) => !F.hidden[p.id] && (F.side === 'all' || F.side === m.side);
 
+  // 專案紀事（本人負責或參與的專案，所有人寫的都顯示）
+  const notesBy = {};
+  if (S.ui.showNotes) {
+    const keys = new Set(doc.projects.filter(p => !F.hidden[p.id]).map(p => ownerOf(sid, p) + '|' + p.id));
+    allNotes().forEach(x => { if (keys.has(x.n.sid + '|' + x.n.pid)) (notesBy[x.date] = notesBy[x.date] || []).push(x); });
+  }
+  const noteChip = x => { const p = byId(doc.projects, x.n.pid); return `<div class="chip note" style="--c:${esc(p ? p.color : 'var(--ink3)')}" title="${esc(`${x.author.name} ${hm(x.n.at)}　${x.n.text}`)}"><span class="ct">✎ ${p ? esc(shortOf(p)) + '｜' : ''}${esc(x.n.text.replace(/\n/g, ' '))}</span></div>`; };
   let title, prevD, nextD, body;
   if (view === 'month') {
     const ms = monthStart(anchor);
@@ -1088,7 +1136,8 @@ function overviewHTML(sid, q, readOnly) {
       cells += `<div class="cal-day ${d.slice(0, 7) !== ms.slice(0, 7) ? 'other' : ''} ${isWeekend(d) ? 'wk' : ''} ${isOff(d) ? 'off' : ''} ${d === t ? 'today' : ''} ${outR ? 'outr' : ''}">
         <div class="cal-dnum"><button data-act="calGo" data-href="${esc(link('week', d))}" aria-label="${mdw(d)}，查看該週">${toDate(d).getDate()}</button>${h ? `<span class="cal-hol" title="${esc(h.name)}">${esc(h.name)}</span>` : ''}</div>
         <div class="cal-items">${items.slice(0, max).map(it => chipHTML(doc, it, d, sid, readOnly, 'short')).join('')}
-        ${items.length > max ? `<button class="more-btn" data-act="calGo" data-href="${esc(link('week', d))}">還有 ${items.length - max} 項</button>` : ''}</div></div>`;
+        ${items.length > max ? `<button class="more-btn" data-act="calGo" data-href="${esc(link('week', d))}">還有 ${items.length - max} 項</button>` : ''}
+        ${(notesBy[d] || []).slice(0, 2).map(noteChip).join('')}${(notesBy[d] || []).length > 2 ? `<button class="more-btn" data-act="calGo" data-href="${esc(link('week', d))}">還有 ${notesBy[d].length - 2} 則紀事</button>` : ''}</div></div>`;
     }
     body = `<div class="cal-month"><div class="cal-head">${['一', '二', '三', '四', '五', '六', '日'].map(w => `<div>${w}</div>`).join('')}</div><div class="cal-grid">${cells}</div></div>`;
   } else if (view === 'week') {
@@ -1104,7 +1153,8 @@ function overviewHTML(sid, q, readOnly) {
       const tasks = F.tasks && L ? L.tasks.filter(x => (x.text || '').trim()) : [];
       cols += `<div class="cw-col ${isWeekend(d) ? 'wk' : ''} ${isOff(d) ? 'off' : ''} ${d === t ? 'today' : ''}">
         <div class="cw-head"><b>${toDate(d).getDate()}</b><span>週${WEEK[dowOf(d)]}</span>${h ? `<span class="cal-hol" style="width:100%">${esc(h.name)}</span>` : ''}</div>
-        <div class="cw-body">${items.map(it => chipHTML(doc, it, d, sid, readOnly, 'full')).join('') || (tasks.length ? '' : '<span class="muted small">—</span>')}
+        <div class="cw-body">${items.map(it => chipHTML(doc, it, d, sid, readOnly, 'full')).join('') || (tasks.length || notesBy[d] ? '' : '<span class="muted small">—</span>')}
+        ${notesBy[d] ? `<div class="cw-sub">紀事</div>${notesBy[d].map(noteChip).join('')}` : ''}
         ${tasks.length ? `<div class="cw-sub">自排工作</div>${tasks.map(tk => { const p = byId(doc.projects, tk.pid); const s = ST[tk.status || '']; return `<div class="chip task ${tk.status === 'done' ? 'done' : ''}" title="${esc(s.t)}"><span class="ct"><span class="sym ${s.cls}">${s.sym}</span> ${p ? esc(projLabel(p)) + '｜' : ''}${esc(tk.text)}</span></div>`; }).join('')}` : ''}
         </div></div>`;
     }
@@ -1128,7 +1178,7 @@ function overviewHTML(sid, q, readOnly) {
       return `<span class="gap" title="從 ${mdw(prev)} 的上一個期程算起（扣除週末與國定假日）">距上一個期程 <b>${n}</b> 個工作天</span>`;
     };
     const days = [];
-    for (let d = from; d <= to; d = addDays(d, 1)) if (all || map[d]) days.push(d);
+    for (let d = from; d <= to; d = addDays(d, 1)) if (all || map[d] || notesBy[d]) days.push(d);
     let lastMonth = '';
     const rows = days.map(d => {
       const head = d.slice(0, 7) !== lastMonth ? `<div class="ag-month">${d.slice(0, 4)} 年 ${+d.slice(5, 7)} 月</div>` : '';
@@ -1140,7 +1190,7 @@ function overviewHTML(sid, q, readOnly) {
         if (it.cont || seen.has(it.p.id)) return `<div class="ag-row">${chip}</div>`;
         seen.add(it.p.id);
         return `<div class="ag-row">${chip}${gapTag(it.p.id, d)}</div>`;
-      }).join('') : '<span class="ag-none">—</span>';
+      }).join('') + (notesBy[d] || []).map(x => `<div class="ag-row">${noteChip(x)}</div>`).join('') : (notesBy[d] ? notesBy[d].map(x => `<div class="ag-row">${noteChip(x)}</div>`).join('') : '<span class="ag-none">—</span>');
       return `${head}<div class="ag-day ${isOff(d) ? 'off' : ''} ${items.length ? '' : 'blank'} ${d === t ? 'today' : ''}"><div class="ag-date">${mdw(d)}${HOL[d] ? `<small>${esc(HOL[d].name)}</small>` : ''}</div>
       <div class="ag-items">${body}</div></div>`;
     }).join('');
@@ -1154,6 +1204,7 @@ function overviewHTML(sid, q, readOnly) {
     <span class="grow"></span>
     <select data-ch="calSide" data-sid="${sid}" aria-label="期程類別"><option value="all" ${F.side === 'all' ? 'selected' : ''}>全部期程</option><option value="ours" ${F.side === 'ours' ? 'selected' : ''}>只看紫晶進度</option><option value="client" ${F.side === 'client' ? 'selected' : ''}>只看單位進度</option></select>
     ${view === 'week' ? `<label class="chk"><input type="checkbox" data-ch="calTasks" data-sid="${sid}" ${F.tasks ? 'checked' : ''}> 顯示自排工作</label>` : ''}
+    <label class="chk"><input type="checkbox" data-ch="calNotes" ${S.ui.showNotes ? 'checked' : ''}> 顯示紀事</label>
     <button class="btn sm" data-act="print">列印</button>
   </div>`;
   const legend = showProj.length ? `<div class="legend">${showProj.map(p => `<button class="${F.hidden[p.id] ? 'off' : ''}" style="--c:${esc(p.color)}" data-act="calToggle" data-sid="${sid}" data-pid="${p.id}" aria-pressed="${!F.hidden[p.id]}" title="${esc(fullOf(p))}（點一下可隱藏／顯示）">${esc(shortOf(p))}</button>`).join('')}
@@ -1282,6 +1333,25 @@ function dayHTML(sid, date, readOnly) {
     </div>`;
   }).join('');
 
+  // 專案紀事（只限自己負責或參與的專案）
+  const noteRows = (L.notes || []).map(n => {
+    const owner = staffOf(n.sid);
+    const p = n.sid && S.docs[n.sid] ? byId(D(n.sid).projects, n.pid) : null;
+    if (readOnly) {
+      if (!(n.text || '').trim()) return '';
+      return `<div class="note-row ro"><span class="tp ${p ? '' : 'none'}" style="${p ? `--c:${esc(p.color)}` : ''}">${esc(p ? shortOf(p) : '已刪除的專案')}</span><div class="note-text">${esc(n.text)}</div><span class="note-time">${hm(n.at)}</span></div>`;
+    }
+    const cur = p ? n.sid + '|' + n.pid : '';
+    const opts = projects.map(x => { const v = ownerOf(sid, x) + '|' + x.id; return `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(shortOf(x))}｜${esc(x.name)}</option>`; }).join('')
+      + (p && !projects.some(x => x.id === p.id) ? `<option value="${esc(cur)}" selected>${esc(shortOf(p))}｜${esc(p.name)}</option>` : '');
+    return `<div class="note-row" data-nid="${n.id}">
+      <select class="task-projsel" data-ch="noteProj" style="--c:${p ? esc(p.color) : 'var(--line)'}" aria-label="紀事所屬專案">${opts}</select>
+      <textarea class="note-in" data-in="noteText" data-auto rows="1" placeholder="例如：書歌B封面＋A封底，已轉達設計" aria-label="紀事內容">${esc(n.text || '')}</textarea>
+      <span class="note-time" title="紀錄時間">${hm(n.at)}</span>
+      <button class="icon-btn" data-act="delNote" aria-label="刪除這則紀事" title="刪除">✕</button>
+    </div>`;
+  }).join('');
+
   const carry = readOnly ? null : carryCandidates(doc, date);
   const hours = HOURS.map(([k, n]) => readOnly
     ? (num(L.hours[k]) ? `<span class="tag">${n} ${num(L.hours[k])} 小時</span> ` : '')
@@ -1298,6 +1368,10 @@ function dayHTML(sid, date, readOnly) {
       ${taskRows || (readOnly ? '<p class="muted small" style="margin:0">沒有填寫自排工作。</p>' : '')}
       ${readOnly ? '' : `<div class="add-row noprint"><button class="btn" data-act="addTask">＋ 新增工作</button>
         ${carry && carry.items.length ? `<button class="btn" data-act="carry">帶入 ${mdw(carry.from)} 未完成的 ${carry.items.length} 項</button>` : ''}</div>`}
+    </section>
+    <section class="blk notes-blk" aria-labelledby="h-notes"><div class="blk-h"><h3 id="h-notes">專案紀事</h3><span class="sub">記錄專案的重要變動與決定，會出現在專案首頁與綜合檢視</span></div>
+      ${noteRows || (readOnly ? '<p class="muted small" style="margin:0">這天沒有專案紀事。</p>' : '')}
+      ${readOnly ? '' : (projects.length ? `<div class="add-row noprint"><button class="btn" data-act="addNote">＋ 新增紀事</button></div>` : '<p class="muted small" style="margin:0">建立或加入專案後，就可以記錄專案紀事。</p>')}
     </section>
     <section class="blk" aria-labelledby="h-hours"><div class="blk-h"><h3 id="h-hours">出勤時數</h3><span class="sub">單位：小時，沒有就留空</span></div>
       ${readOnly ? (hours.trim() || '<span class="muted small">無</span>') : `<div class="hours">${hours}</div>`}</section>
@@ -1423,18 +1497,13 @@ function exportProjectCSV(sid, pid) {
 const TL_DW = { 1: 30, 3: 11, 6: 6 };           // 每一天的寬度（px）
 const TL_ROW = { head: 26, days: 24, dens: 30, group: 30, proj: 38 };
 
-function viewTimeline(isBoss, q) {
+function viewTimeline(isBoss, q, embed) {
   const t = todayStr();
   const z = ['1', '3', '6'].includes(String(q.z)) ? +q.z : 3;
   const start = monthStart(isDate(q.d) ? q.d : t);
   const endEx = addMonths(start, z);
-  const who = q.who && staffOf(q.who) ? q.who : '';
-  const showClosed = q.closed === '1';
-  const base = isBoss ? '#/boss/timeline' : '#/timeline';
-  const link = o => {
-    const p = Object.assign({ d: start, z, who, closed: showClosed ? '1' : '' }, o);
-    return base + '?' + Object.entries(p).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
-  };
+  const link = o => casesLink(isBoss, q, Object.assign({ view: 'timeline', d: start, z }, o));
+  const who = caseFilters(q).who;
 
   // 日期軸
   const days = [];
@@ -1445,15 +1514,8 @@ function viewTimeline(isBoss, q) {
   const cx = d => idx(d) * dw + dw / 2;
   const inView = d => d >= start && d < endEx;
 
-  // 專案（依負責人分組；參與者標在旁邊）
-  const groups = CFG().staff.map(o => {
-    if (!S.docs[o.id]) return null;
-    const projs = sortedProjects(D(o.id), true)
-      .filter(p => showClosed || p.status !== 'closed')
-      .map(p => ({ p, owner: o, parts: participantsOf(o.id, p.id), ms: D(o.id).milestones.filter(m => m.projectId === p.id && (m.text || '').trim()) }))
-      .filter(x => !who || x.owner.id === who || x.parts.some(s => s.id === who));
-    return projs.length ? { o, projs } : null;
-  }).filter(Boolean);
+  // 專案（依負責人分組；參與者標在旁邊），套用專案總覽上方的篩選
+  const groups = caseGroups(q);
 
   // 每週期程數（目前顯示的專案）
   const perDay = {};
@@ -1521,8 +1583,8 @@ function viewTimeline(isBoss, q) {
     left += `<div class="tl-l group" style="height:${TL_ROW.group}px"><span class="dot" style="--c:${esc(g.o.color)}"></span>${esc(g.o.name)}<small>${ROLE_NAME[roleOf(g.o.id)]}</small></div>`;
     right += `<div class="tl-row group" style="height:${TL_ROW.group}px"></div>`;
     g.projs.forEach(x => {
-      left += `<div class="tl-l proj ${x.p.status === 'closed' ? 'closed' : ''}" style="height:${TL_ROW.proj}px;--c:${esc(x.p.color)}" title="${esc(fullOf(x.p))}${x.parts.length ? '｜參與：' + esc(x.parts.map(s => s.name).join('、')) : ''}">
-        <b>${esc(shortOf(x.p))}</b>${x.parts.map(s => `<span class="who-mini" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</div>`;
+      left += `<a class="tl-l proj ${x.p.status === 'closed' ? 'closed' : ''}" href="${esc(isBoss ? `#/boss/projects/${x.owner.id}/${x.p.id}` : projLink(x.owner.id, x.p.id))}" style="height:${TL_ROW.proj}px;--c:${esc(x.p.color)}" title="${esc(fullOf(x.p))}${x.parts.length ? '｜參與：' + esc(x.parts.map(s => s.name).join('、')) : ''}">
+        <b>${esc(shortOf(x.p))}</b>${x.parts.map(s => `<span class="who-mini" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</a>`;
       right += projRow(x);
     });
   });
@@ -1534,8 +1596,6 @@ function viewTimeline(isBoss, q) {
     <div class="cal-nav"><a class="icon-btn" href="${esc(link({ d: addMonths(start, -z) }))}" aria-label="往前">‹</a><a class="btn sm" href="${esc(link({ d: t }))}">本月</a><a class="icon-btn" href="${esc(link({ d: addMonths(start, z) }))}" aria-label="往後">›</a>
       <h3>${start.slice(0, 4)}/${+start.slice(5, 7)} – ${lastDay.slice(0, 4) !== start.slice(0, 4) ? lastDay.slice(0, 4) + '/' : ''}${+lastDay.slice(5, 7)} 月</h3></div>
     <span class="grow"></span>
-    <select data-ch="tlWho" aria-label="篩選人員"><option value="">全部人員</option>${CFG().staff.map(s => `<option value="${esc(s.id)}" ${who === s.id ? 'selected' : ''}>${esc(s.name)}（負責或參與）</option>`).join('')}</select>
-    <label class="chk"><input type="checkbox" data-ch="tlClosed" ${showClosed ? 'checked' : ''}> 含已結案</label>
     <button class="btn sm" data-act="print">列印</button>
   </div>`;
   const legend = `<div class="tl-legend"><span><i class="tl-dot-k"></i>紫晶進度</span><span><i class="tl-dot-k client"></i>單位進度</span><span><i class="tl-dot-k tent"></i>待確認</span>
@@ -1544,12 +1604,9 @@ function viewTimeline(isBoss, q) {
 
   const body = groups.length
     ? `<div class="tl"><div class="tl-left">${left}</div><div class="tl-right" id="tl-scroll"><div class="tl-canvas" style="min-width:${W}px">${offLayer}${todayLine}${right}</div></div></div>`
-    : `<div class="empty"><h3>沒有符合條件的專案</h3><p>${who ? '試著改選「全部人員」。' : '各企劃編輯建立專案後，就會出現在這裡。'}</p></div>`;
+    : `<div class="empty"><h3>沒有符合條件的專案</h3><p>試著清除上方的篩選條件。</p></div>`;
   if (inView(t)) S.afterRender = () => { const sc = $('#tl-scroll'); if (sc && sc.scrollWidth > sc.clientWidth) sc.scrollLeft = Math.max(0, cx(t) - sc.clientWidth * 0.3); };
-  document.title = '全案時間表｜' + CFG().company;
-  return topbar(isBoss ? { mode: 'boss', tab: 'timeline' } : { mode: 'timeline' }) + `<main class="wide">
-    <div class="page-head"><div><h1>全案時間表</h1><p>公司所有專案的期程並排在同一條時間軸上，方便對照各案進度與忙碌的週次。這裡只能檢視，修改請到各專案頁面。</p></div></div>
-    ${bar}${legend}${body}</main>`;
+  return `${bar}${legend}${body}`;
 }
 
 function tlDetail(ownerSid, pid, date) {
@@ -1572,6 +1629,306 @@ function tlGo(changes) {
   const q = Object.assign({}, S.route.q, changes);
   go(base + '?' + Object.entries(q).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'));
 }
+
+/* =====================================================================
+ * 案件視角：專案首頁、專案總覽（卡片／時間表）、搜尋
+ * 路由：#/projects（所有人）、#/projects/:owner/:pid（專案首頁，唯讀）
+ *       #/boss/projects、#/boss/projects/:owner/:pid（主管檢視）
+ *       #/s/:sid/plan/p/:pid（同仁自己的專案首頁，可新增紀事）
+ * ===================================================================== */
+const ICON_SEARCH = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M20 20l-4.2-4.2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+const STATUS_NAME = { active: '進行中', paused: '暫停', closed: '已結案' };
+
+/** 依目前檢視者決定專案要連到哪裡 */
+function projLink(ownerSid, pid) {
+  const c = S.ctxTop || {};
+  if (c.mode === 'boss') return `#/boss/projects/${ownerSid}/${pid}`;
+  if (c.mode === 'staff' && c.sid && S.docs[c.sid]) {
+    if (ownerSid === c.sid || (D(c.sid).links || []).some(l => l.sid === ownerSid && l.pid === pid)) return `#/s/${c.sid}/plan/p/${pid}`;
+  }
+  return `#/projects/${ownerSid}/${pid}`;
+}
+
+/* ---------------- 篩選（專案總覽與時間表共用） ---------------- */
+function caseFilters(q) {
+  return {
+    s: String(q.s || '').trim(),
+    owner: q.owner && staffOf(q.owner) ? q.owner : '',
+    who: q.who && staffOf(q.who) ? q.who : '',
+    st: ['all', 'closed', 'active'].includes(q.st) ? q.st : (q.closed === '1' ? 'all' : 'active'),
+  };
+}
+function caseGroups(q) {
+  const F = caseFilters(q);
+  const terms = F.s.toLowerCase().split(/\s+/).filter(Boolean);
+  return CFG().staff.map(o => {
+    if (!S.docs[o.id] || (F.owner && F.owner !== o.id)) return null;
+    const projs = sortedProjects(D(o.id), true)
+      .filter(p => F.st === 'all' || (F.st === 'closed' ? p.status === 'closed' : p.status !== 'closed'))
+      .map(p => ({ p, owner: o, parts: participantsOf(o.id, p.id), ms: D(o.id).milestones.filter(m => m.projectId === p.id && (m.text || '').trim()) }))
+      .filter(x => !F.who || x.owner.id === F.who || x.parts.some(s => s.id === F.who))
+      .filter(x => !terms.length || terms.every(tm => [x.p.code, x.p.name, x.p.short, x.p.client, x.owner.name, ...x.parts.map(s => s.name)].join(' ').toLowerCase().includes(tm)));
+    return projs.length ? { o, projs } : null;
+  }).filter(Boolean);
+}
+function casesBase(isBoss) { return isBoss ? '#/boss/projects' : '#/projects'; }
+function casesLink(isBoss, q, o) {
+  const p = Object.assign({}, q, o);
+  const qs = Object.entries(p).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  return casesBase(isBoss) + (qs ? '?' + qs : '');
+}
+function casesGo(changes) {
+  const isBoss = S.route.parts[0] === 'boss';
+  go(casesLink(isBoss, S.route.q, changes));
+}
+
+/* ---------------- 專案總覽 ---------------- */
+function progressBar(pr) {
+  return `<div class="pbar" role="img" aria-label="期程進度 ${pr.pct}%"><i style="width:${pr.pct}%"></i></div>`;
+}
+function viewProjects(isBoss, q) {
+  const view = q.view === 'timeline' ? 'timeline' : 'cards';
+  const F = caseFilters(q);
+  const t = todayStr();
+  const opt = (list, cur, all) => `<option value="">${all}</option>` + list.map(s => `<option value="${esc(s.id)}" ${cur === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  const staff = CFG().staff;
+  const bar = `<div class="case-bar noprint">
+    <label class="case-search">${ICON_SEARCH}<input id="case-s" type="search" data-in="caseSearch" value="${esc(F.s)}" placeholder="篩選專案名稱、簡稱、代號、委託單位、人員" aria-label="篩選專案"></label>
+    <select data-ch="caseOwner" aria-label="負責人">${opt(staff.filter(s => roleOf(s.id) === 'pm'), F.owner, '全部負責人')}</select>
+    <select data-ch="caseWho" aria-label="參與者">${opt(staff, F.who, '全部參與者')}</select>
+    <select data-ch="caseSt" aria-label="狀態"><option value="active" ${F.st === 'active' ? 'selected' : ''}>進行中（含暫停）</option><option value="all" ${F.st === 'all' ? 'selected' : ''}>全部專案</option><option value="closed" ${F.st === 'closed' ? 'selected' : ''}>已結案</option></select>
+    <span class="grow"></span>
+    <div class="seg" role="tablist"><a role="tab" class="${view === 'cards' ? 'on' : ''}" href="${esc(casesLink(isBoss, q, { view: '' }))}">卡片</a><a role="tab" class="${view === 'timeline' ? 'on' : ''}" href="${esc(casesLink(isBoss, q, { view: 'timeline' }))}">時間表</a></div>
+  </div>`;
+  let body;
+  if (view === 'timeline') body = viewTimeline(isBoss, q, true);
+  else {
+    const groups = caseGroups(q);
+    body = groups.length ? groups.map(g => `<section class="case-group">
+      <h2><span class="dot" style="--c:${esc(g.o.color)}"></span>${esc(g.o.name)}<small>${ROLE_NAME[roleOf(g.o.id)]}・${g.projs.length} 個專案</small></h2>
+      <div class="case-cards">${g.projs.map(x => {
+        const pr = scheduleProgress(g.o.id, x.p.id);
+        const next = x.ms.filter(m => m.date >= t).sort((a, b) => a.date.localeCompare(b.date))[0];
+        const nNotes = allNotes(g.o.id, x.p.id).length;
+        return `<a class="case-card ${x.p.status || 'active'}" style="--c:${esc(x.p.color)}" href="${esc(isBoss ? `#/boss/projects/${g.o.id}/${x.p.id}` : projLink(g.o.id, x.p.id))}">
+          <div class="cc-top"><b>${esc(shortOf(x.p))}</b><span class="st-badge ${x.p.status || 'active'}">${STATUS_NAME[x.p.status || 'active']}</span></div>
+          <div class="cc-name">${esc(fullOf(x.p))}</div>
+          ${x.parts.length ? `<div class="cc-parts">參與：${x.parts.map(s => `<span class="who-mini" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</div>` : '<div class="cc-parts muted">沒有參與的設計</div>'}
+          ${progressBar(pr)}
+          <div class="cc-meta">${pr.total ? `期程進度 ${pr.passed}／${pr.total}（${pr.pct}%）` : '尚未填寫期程'}${nNotes ? `・紀事 ${nNotes} 則` : ''}</div>
+          <div class="cc-next">${next ? `下一個：<b>${mdw(next.date)}</b> ${esc(next.text.split('\n')[0])}` : '<span class="muted">沒有之後的期程</span>'}</div>
+        </a>`;
+      }).join('')}</div></section>`).join('')
+      : `<div class="empty"><h3>沒有符合條件的專案</h3><p>試著清除上方的篩選條件。</p></div>`;
+  }
+  document.title = '專案總覽｜' + CFG().company;
+  return topbar(isBoss ? { mode: 'boss', tab: 'projects' } : { mode: 'projects' }) + `<main class="${view === 'timeline' ? 'wide' : ''}">
+    <div class="page-head"><div><h1>專案總覽</h1><p>以案件為主的檢視：每個專案的狀態、進度與下一個期程。點專案可進入專案首頁。</p></div></div>
+    ${bar}${body}</main>`;
+}
+
+/* ---------------- 專案首頁 ---------------- */
+function miniTimeline(ownerSid, p) {
+  const t = todayStr();
+  const start = monthStart(t), endEx = addMonths(start, 3);
+  const total = Math.round((toDate(endEx) - toDate(start)) / 86400000);
+  const pos = d => ((toDate(d) - toDate(start)) / 86400000 + 0.5) / total * 100;
+  const inV = d => d >= start && d < endEx;
+  const ms = D(ownerSid).milestones.filter(m => m.projectId === p.id && (m.text || '').trim() && inV(m.date));
+  const notes = allNotes(ownerSid, p.id).filter(x => inV(x.date));
+  const months = [0, 1, 2].map(i => { const m = addMonths(start, i); return `<span class="mt-mon" style="left:${pos(m) - 0.5 / total * 100}%">${+m.slice(5, 7)} 月</span>`; }).join('');
+  const dots = ms.map(m => `<i class="mt-dot ${m.side === 'client' ? 'client' : ''} ${m.tentative ? 'tent' : ''}" style="left:${pos(m.date)}%" title="${esc(mdw(m.date) + ' ' + (m.side === 'client' ? '［單位］' : '') + m.text.trim())}"></i>`).join('');
+  const nds = notes.map(x => `<i class="mt-note" style="left:${pos(x.date)}%" title="${esc(mdw(x.date) + ' ✎ ' + x.author.name + '：' + x.n.text)}">✎</i>`).join('');
+  return `<div class="mtl" style="--c:${esc(p.color)}">${months}<div class="mt-line"></div>${dots}${nds}${inV(t) ? `<i class="mt-today" style="left:${pos(t)}%" title="今天"></i>` : ''}</div>
+    <div class="mt-key"><span><i class="mt-dot"></i>紫晶進度</span><span><i class="mt-dot client"></i>單位進度</span><span><i class="mt-note">✎</i>紀事</span><span><i class="mt-today-k"></i>今天</span></div>`;
+}
+
+/**
+ * opt: { sid: 檢視中的同仁（可新增紀事）, canEdit, allNotes, isBoss }
+ */
+function projectHomeHTML(ownerSid, p, opt = {}) {
+  const t = todayStr();
+  const owner = staffOf(ownerSid);
+  const parts = participantsOf(ownerSid, p.id);
+  const pr = scheduleProgress(ownerSid, p.id);
+  const odoc = D(ownerSid);
+  // 本週
+  const mon = mondayOf(t), sun = addDays(mon, 6);
+  const wk = [];
+  for (let d = mon; d <= sun; d = addDays(d, 1)) odoc.milestones.forEach(m => { if (m.projectId === p.id && m.date === d && (m.text || '').trim()) wk.push(m); });
+  const next = pr.ms.filter(m => m.date > sun).sort((a, b) => a.date.localeCompare(b.date))[0];
+  // 需要注意：近 30 天被標記延宕的期程、未來兩週待確認的期程
+  const watch = [];
+  [owner].concat(parts).forEach(st => {
+    if (!st || !S.docs[st.id]) return;
+    Object.entries(D(st.id).logs || {}).forEach(([d, L]) => {
+      if (d < addDays(t, -30) || d > t) return;
+      Object.entries(L.auto || {}).forEach(([mid, a]) => {
+        if (!a || a.status !== 'delay') return;
+        const m = byId(odoc.milestones, mid);
+        if (m && m.projectId === p.id) watch.push({ kind: 'delay', d, m, st, note: a.note || '' });
+      });
+    });
+  });
+  pr.ms.filter(m => m.tentative && m.date >= t && m.date <= addDays(t, 14)).forEach(m => watch.push({ kind: 'tent', d: m.date, m }));
+  watch.sort((a, b) => a.d.localeCompare(b.d));
+  // 紀事
+  const notes = allNotes(ownerSid, p.id);
+  const shown = opt.allNotes ? notes : notes.slice(0, 6);
+  const canNote = !!opt.sid && (opt.sid === ownerSid || parts.some(s => s.id === opt.sid));
+
+  const msRow = m => `<li><span class="d">${mdw(m.date)}</span><span class="tx">${m.side === 'client' ? '<span class="tag client">單位</span>' : ''}${esc(m.text.trim().replace(/\n/g, '／'))}${m.tentative ? '<span class="tag tent">待確認</span>' : ''}${m.endDate ? `<span class="tag">至 ${md(m.endDate)}</span>` : ''}</span></li>`;
+  const startD = pr.first, endD = pr.last;
+  const todayPos = startD && endD && endD > startD ? Math.min(100, Math.max(0, (toDate(t) - toDate(startD)) / (toDate(endD) - toDate(startD)) * 100)) : null;
+
+  return `<div class="phome" style="--c:${esc(p.color)}">
+    <header class="ph-head">
+      <div class="ph-title"><h2>${esc(shortOf(p))}</h2><span class="ph-full">${esc(fullOf(p))}</span><span class="st-badge ${p.status || 'active'}">${STATUS_NAME[p.status || 'active']}</span></div>
+      <div class="ph-meta"><span>負責：<b>${esc(owner ? owner.name : '')}</b>（${ROLE_NAME[roleOf(ownerSid)]}）</span>
+        <span>參與：${parts.length ? parts.map(s => `<span class="who-mini" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('') : '<span class="muted">無</span>'}</span>
+        ${p.client ? `<span>委託單位：<b>${esc(p.client)}</b></span>` : ''}${p.note ? `<span class="muted">${esc(p.note)}</span>` : ''}</div>
+      ${opt.canEdit ? `<div class="row noprint"><button class="btn sm" data-act="editProject" data-pid="${p.id}">編輯專案</button><button class="btn sm" data-act="importPlan" data-pid="${p.id}">匯入期程</button></div>` : ''}
+    </header>
+    <section class="ph-card ph-progress">
+      <div class="ph-h"><h3>期程進度</h3><span class="muted small">日期已過的期程數／全部期程數</span></div>
+      ${pr.total ? `<div class="ph-pct"><b>${pr.pct}%</b><span>已走過 ${pr.passed}／${pr.total} 個期程</span></div>${progressBar(pr)}
+        <div class="ph-span"><span>${mdw(startD)}${startD.slice(0, 4) !== t.slice(0, 4) ? ' ' + startD.slice(0, 4) : ''} 第一個期程</span>${todayPos != null ? `<span class="ph-today" style="left:${todayPos}%">今天</span>` : ''}<span>${mdw(endD)}${endD.slice(0, 4) !== t.slice(0, 4) ? ' ' + endD.slice(0, 4) : ''} 最後一個期程</span></div>`
+        : '<p class="muted">尚未填寫期程。</p>'}
+    </section>
+    <div class="ph-grid">
+      <section class="ph-card"><div class="ph-h"><h3>本週期程</h3><span class="muted small">${md(mon)}–${md(sun)}</span></div>
+        ${wk.length ? `<ul class="ph-list">${wk.map(msRow).join('')}</ul>` : '<p class="muted small" style="margin:0">本週沒有期程。</p>'}
+        ${next ? `<div class="ph-next">下一個期程：<b>${mdw(next.date)}</b> ${esc(next.text.split('\n')[0])}</div>` : ''}</section>
+      <section class="ph-card"><div class="ph-h"><h3>需要注意</h3><span class="muted small">近 30 天延宕、未來兩週待確認</span></div>
+        ${watch.length ? `<ul class="ph-list">${watch.map(w => w.kind === 'delay'
+          ? `<li class="warn"><span class="d">${mdw(w.d)}</span><span class="tx"><b>延宕</b>　${esc(w.m.text.trim().split('\n')[0])}<span class="muted">（${esc(w.st.name)}標記${w.note ? '：' + esc(w.note) : ''}）</span></span></li>`
+          : `<li class="tent"><span class="d">${mdw(w.d)}</span><span class="tx"><b>待確認</b>　${esc(w.m.text.trim().split('\n')[0])}</span></li>`).join('')}</ul>` : '<p class="muted small" style="margin:0">目前沒有需要注意的事項。</p>'}</section>
+    </div>
+    <section class="ph-card"><div class="ph-h"><h3>專案紀事</h3><span class="muted small">共 ${notes.length} 則，由新到舊</span></div>
+      ${canNote ? `<div class="ph-addnote noprint"><textarea id="ph-note" rows="2" data-auto placeholder="記錄這個專案的重要變動或決定，例如：書歌B封面＋A封底，已轉達設計"></textarea><button class="btn primary" data-act="addProjNote" data-owner="${esc(ownerSid)}" data-pid="${p.id}">新增紀事</button></div>` : ''}
+      ${shown.length ? `<ol class="ph-notes">${shown.map(x => `<li><div class="pn-when"><b>${mdw(x.date)}</b>${x.date.slice(0, 4) !== t.slice(0, 4) ? ' ' + x.date.slice(0, 4) : ''}<span>${hm(x.n.at)}</span></div>
+          <div class="pn-body"><span class="who-mini" style="--c:${esc(x.author.color)}">${esc(x.author.name)}</span>${esc(x.n.text)}${opt.sid === x.author.id ? ` <a class="pn-edit noprint" href="#/s/${x.author.id}/log/${x.date}">在日誌中編輯</a>` : ''}</div></li>`).join('')}</ol>`
+        : `<p class="muted small" style="margin:0">還沒有紀事。${canNote ? '' : '負責人與參與的設計可以在工作日誌或自己的專案首頁新增。'}</p>`}
+      ${!opt.allNotes && notes.length > shown.length ? `<button class="btn sm" data-act="phAllNotes">看全部 ${notes.length} 則</button>` : ''}
+    </section>
+    <section class="ph-card"><div class="ph-h"><h3>未來三個月</h3><span class="muted small">本專案的期程與紀事</span></div>${miniTimeline(ownerSid, p)}</section>
+  </div>`;
+}
+
+function projTabs(sid, p, tab) {
+  const base = `#/s/${sid}/plan/p/${p.id}`;
+  const tabs = p.link ? [['home', '首頁', base], ['list', '期程清單', base + '?mode=list']]
+    : [['home', '首頁', base], ['grid', '逐日填寫', base + '?tab=grid'], ['list', '期程清單', base + '?mode=list']];
+  return `<nav class="ptabs noprint" aria-label="專案分頁">${tabs.map(([k, n, h]) => `<a class="${tab === k ? 'on' : ''}" href="${h}">${n}</a>`).join('')}</nav>`;
+}
+
+function viewCaseProject(isBoss, ownerSid, pid, q) {
+  const o = staffOf(ownerSid);
+  const p = o && S.docs[ownerSid] ? byId(D(ownerSid).projects, pid) : null;
+  if (!p) { go(casesBase(isBoss), true); return null; }
+  document.title = shortOf(p) + '｜專案首頁';
+  return topbar(isBoss ? { mode: 'boss', tab: 'projects' } : { mode: 'projects' }) + `<main>
+    <a class="backlink noprint" href="${casesBase(isBoss)}">‹ 專案總覽</a>
+    ${projectHomeHTML(ownerSid, p, { allNotes: q.notes === 'all', isBoss })}</main>`;
+}
+
+function addProjNote(el) {
+  const sid = S.ctxTop && S.ctxTop.sid; if (!sid) return;
+  const ta = $('#ph-note'); const text = ta ? ta.value.trim() : '';
+  if (!text) { if (ta) ta.focus(); toast('請先輸入紀事內容', true); return; }
+  const doc = D(sid), date = todayStr();
+  const L = getLog(doc, date, true);
+  L.notes = L.notes || [];
+  L.notes.push({ id: uid(), sid: el.dataset.owner, pid: el.dataset.pid, text, at: now(), u: now() });
+  staffTouchLog(L); touchStaff(sid);
+  toast('已新增紀事'); render({ keepScroll: true });
+}
+
+/* ---------------- 搜尋 ---------------- */
+function searchIndex() {
+  const c = S.ctxTop || {};
+  const staffCtx = c.mode === 'staff' && c.sid ? c.sid : null;
+  const items = [];
+  CFG().staff.forEach(st => {
+    const doc = S.docs[st.id] && S.docs[st.id].data; if (!doc) return;
+    const pm = Object.fromEntries(doc.projects.map(p => [p.id, p]));
+    doc.projects.forEach(p => items.push({ type: 'proj', text: [p.code, p.name, p.short, p.client, p.note].filter(Boolean).join(' '), p, owner: st, date: '', href: projLink(st.id, p.id),
+      title: `${shortOf(p)}　${fullOf(p)}`, sub: `負責：${st.name}${p.client ? '・' + p.client : ''}・${STATUS_NAME[p.status || 'active']}` }));
+    doc.milestones.forEach(m => {
+      const p = pm[m.projectId]; if (!p || !(m.text || '').trim()) return;
+      const own = staffCtx && projLink(st.id, p.id).startsWith('#/s/');
+      items.push({ type: 'ms', text: m.text + ' ' + (m.note || ''), p, owner: st, date: m.date,
+        href: own ? `#/s/${staffCtx}/plan/p/${p.id}?m=${m.date.slice(0, 7)}&focus=${m.date}` : projLink(st.id, p.id),
+        title: `${shortOf(p)}｜${m.text.trim().replace(/\n/g, '／')}`, sub: `${mdw(m.date)}${m.date.slice(0, 4) !== todayStr().slice(0, 4) ? ' ' + m.date.slice(0, 4) : ''}・${m.side === 'client' ? '單位進度' : '紫晶進度'}${m.note ? '・' + m.note : ''}` });
+    });
+  });
+  allNotes().forEach(x => {
+    const p = S.docs[x.n.sid] ? byId(D(x.n.sid).projects, x.n.pid) : null;
+    items.push({ type: 'note', text: x.n.text, p, owner: staffOf(x.n.sid), date: x.date, href: p ? projLink(x.n.sid, p.id) : '#/',
+      title: `${p ? shortOf(p) + '｜' : ''}${x.n.text}`, sub: `${mdw(x.date)} ${hm(x.n.at)}・${x.author.name}` });
+  });
+  CFG().staff.forEach(st => {
+    if (staffCtx && st.id !== staffCtx) return;   // 同仁只搜尋自己的日誌
+    const doc = S.docs[st.id] && S.docs[st.id].data; if (!doc) return;
+    const vdoc = V(st.id);
+    const href = d => staffCtx ? `#/s/${st.id}/log/${d}` : `#/boss/${st.id}/log/${d}?v=day`;
+    Object.entries(doc.logs || {}).forEach(([d, L]) => {
+      (L.tasks || []).forEach(tk => { if ((tk.text || '').trim()) { const p = byId(vdoc.projects, tk.pid); items.push({ type: 'log', text: tk.text + ' ' + (tk.note || ''), p, owner: st, date: d, href: href(d), title: `${p ? shortOf(p) + '｜' : ''}${tk.text}`, sub: `${mdw(d)}・${st.name}・自排工作${tk.note ? '・' + tk.note : ''}` }); } });
+      Object.entries(L.auto || {}).forEach(([mid, a]) => { if (a && (a.note || '').trim()) { const m = byId(vdoc.milestones, mid); items.push({ type: 'log', text: a.note + ' ' + (m ? m.text : ''), owner: st, date: d, href: href(d), title: a.note, sub: `${mdw(d)}・${st.name}・期程說明${m ? '：' + m.text.split('\n')[0] : ''}` }); } });
+      if ((L.remark || '').trim()) items.push({ type: 'log', text: L.remark, owner: st, date: d, href: href(d), title: L.remark.trim().split('\n')[0], sub: `${mdw(d)}・${st.name}・外包／其他備註`, long: L.remark });
+    });
+  });
+  return items;
+}
+const SEARCH_TYPES = [['all', '全部'], ['proj', '專案'], ['ms', '期程'], ['note', '紀事'], ['log', '工作日誌']];
+function openSearch(prefill) {
+  if (document.querySelector('.modal.search-modal')) return;
+  const idx = searchIndex();
+  const st = { type: 'all', more: {} };
+  const body = `<div class="srch">
+    <label class="case-search big">${ICON_SEARCH}<input id="srch-q" type="search" value="${esc(prefill || '')}" placeholder="搜尋專案、期程、紀事、工作日誌…" aria-label="搜尋" autocomplete="off"></label>
+    <div class="srch-types" role="tablist">${SEARCH_TYPES.map(([k, n]) => `<button type="button" role="tab" data-t="${k}" class="${k === 'all' ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <div class="srch-res" id="srch-res" aria-live="polite"></div></div>`;
+  openModal({
+    title: '搜尋', wide: true, body, actions: [],
+    onOpen: bg => {
+      bg.querySelector('.modal').classList.add('search-modal');
+      const inp = bg.querySelector('#srch-q'), box = bg.querySelector('#srch-res');
+      const hl = (s, terms) => { let h = esc(s); terms.forEach(tm => { if (!tm) return; const re = new RegExp(esc(tm).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); h = h.replace(re, x => `<mark>${x}</mark>`); }); return h; };
+      const paint = () => {
+        const terms = inp.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        if (!terms.length) { box.innerHTML = '<p class="muted small">輸入關鍵字，例如專案簡稱、期程內容或紀事中的文字。多個關鍵字用空格分開。</p>'; return; }
+        const hits = idx.filter(it => (st.type === 'all' || it.type === st.type) && terms.every(tm => (it.text + ' ' + (it.title || '')).toLowerCase().includes(tm)));
+        if (!hits.length) { box.innerHTML = '<p class="muted">找不到符合的內容。</p>'; return; }
+        box.innerHTML = SEARCH_TYPES.slice(1).map(([k, n]) => {
+          let list = hits.filter(h => h.type === k); if (!list.length) return '';
+          list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+          const lim = st.more[k] ? list.length : 8;
+          return `<section class="srch-g"><h3>${n}<small>${list.length}</small></h3><ul>${list.slice(0, lim).map(h => {
+            let title = h.title;
+            if (h.long) { const low = h.long.toLowerCase(); const i = low.indexOf(terms[0]); title = (i > 20 ? '…' : '') + h.long.slice(Math.max(0, i - 20), i + 60).replace(/\n/g, ' '); }
+            return `<li><a href="${esc(h.href)}" data-go>${h.p ? `<span class="sw" style="--c:${esc(h.p.color)}"></span>` : '<span class="sw"></span>'}<span class="srch-t">${hl(title, terms)}</span><span class="srch-s">${hl(h.sub || '', terms)}</span></a></li>`;
+          }).join('')}</ul>${list.length > lim ? `<button type="button" class="link-btn" data-more="${k}">顯示全部 ${list.length} 筆</button>` : ''}</section>`;
+        }).join('');
+      };
+      let tm = null;
+      inp.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(paint, 120); });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); const a = box.querySelector('a[data-go]'); if (a) a.click(); } });
+      bg.querySelector('.srch-types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.type = b.dataset.t; bg.querySelectorAll('.srch-types button').forEach(x => x.classList.toggle('on', x === b)); paint(); });
+      box.addEventListener('click', e => {
+        const m = e.target.closest('[data-more]'); if (m) { st.more[m.dataset.more] = true; paint(); return; }
+        const a = e.target.closest('a[data-go]'); if (a) { const x = bg.querySelector('[data-x]'); if (x) x.click(); }
+      });
+      paint(); setTimeout(() => { inp.focus(); inp.select(); }, 40);
+    },
+  });
+}
+document.addEventListener('keydown', e => {
+  if (!S.config) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openSearch(); }
+  else if (e.key === '/' && !typing && !document.querySelector('.modal-bg')) { e.preventDefault(); openSearch(); }
+});
 
 /* =====================================================================
  * 匯入專案期程：① 專案匯入檔（JSON）② 直接貼上文字（逗號分隔或從 Excel 複製）
@@ -2263,6 +2620,9 @@ const ACT = {
   newProject: () => projectDialog(ctxSid()),
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
+  openSearch: () => openSearch(),
+  addProjNote: el => addProjNote(el),
+  phAllNotes: () => { const q = Object.assign({}, S.route.q, { notes: 'all' }); go(location.hash.split('?')[0] + '?' + Object.entries(q).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&')); },
   importPlan: el => importDialog(ctxSid(), el.dataset.pid),
   exportAttendance: el => exportAttendanceCSV(el.dataset.m),
   tlDot: el => tlDetail(el.dataset.owner, el.dataset.pid, el.dataset.date),
@@ -2288,6 +2648,22 @@ const ACT = {
     location.hash = `#/s/${sid}/plan/p/${m.projectId}?m=${m.date.slice(0, 7)}&focus=${m.date}`;
   },
   addTask: () => { const { sid, date } = curLogCtx(); addTask(sid, date, {}, true); render({ keepScroll: true }); },
+  addNote: () => {
+    const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
+    const ps = sortedProjects(V(sid), false);
+    const last = S.ui.lastNote && ps.find(p => ownerOf(sid, p) + '|' + p.id === S.ui.lastNote);
+    const p = last || ps[0]; if (!p) return;
+    L.notes = L.notes || [];
+    const n = { id: uid(), sid: ownerOf(sid, p), pid: p.id, text: '', at: now(), u: now() };
+    L.notes.push(n); staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
+    setTimeout(() => { const el = document.querySelector(`[data-nid="${n.id}"] .note-in`); if (el) el.focus(); }, 30);
+  },
+  delNote: async el => {
+    const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date); if (!L) return;
+    const nid = el.closest('[data-nid]').dataset.nid; const n = (L.notes || []).find(x => x.id === nid);
+    if (n && (n.text || '').trim() && !(await confirmBox('刪除紀事', `確定刪除這則紀事？\n「${n.text}」`, '刪除', true))) return;
+    L.notes = (L.notes || []).filter(x => x.id !== nid); doc.deleted[nid] = now(); staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
+  },
   delTask: async el => {
     const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date); if (!L) return;
     const tid = el.closest('[data-tid]').dataset.tid; const tk = L.tasks.find(t => t.id === tid);
@@ -2378,6 +2754,24 @@ const IN = {
     L.auto[mid] = Object.assign({}, L.auto[mid], { note: el.value }); staffTouchLog(L); touchStaff(sid);
   },
   taskText: el => { const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true); const tk = L.tasks.find(t => t.id === el.closest('[data-tid]').dataset.tid); if (tk) { tk.text = el.value; staffTouchLog(L); touchStaff(sid); } },
+  caseSearch: el => {
+    clearTimeout(S._caseT);
+    S._caseT = setTimeout(() => {
+      const v = el.value;
+      S.afterRender = () => { const i = $('#case-s'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } };
+      casesGo({ s: v.trim() });
+    }, 350);
+  },
+  sideFilter: el => {
+    const v = el.value.trim().toLowerCase();
+    $$('.proj-list li[data-q]').forEach(li => { li.hidden = !!v && !li.dataset.q.includes(v); });
+  },
+  noteText: el => {
+    const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
+    const n = (L.notes || []).find(x => x.id === el.closest('[data-nid]').dataset.nid);
+    if (n) { n.text = el.value; n.u = now(); staffTouchLog(L); touchStaff(sid); }
+    autosize(el);
+  },
   taskNote: el => { const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true); const tk = L.tasks.find(t => t.id === el.closest('[data-tid]').dataset.tid); if (tk) { tk.note = el.value; staffTouchLog(L); touchStaff(sid); } },
   hours: el => { const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true); L.hours[el.dataset.k] = el.value; staffTouchLog(L); touchStaff(sid); },
   remark: el => { const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true); L.remark = el.value; autosize(el); staffTouchLog(L); touchStaff(sid); },
@@ -2400,6 +2794,10 @@ const CH = {
   },
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
   tlWho: el => tlGo({ who: el.value }),
+  caseOwner: el => casesGo({ owner: el.value }),
+  caseWho: el => casesGo({ who: el.value }),
+  caseSt: el => casesGo({ st: el.value === 'active' ? '' : el.value }),
+  calNotes: el => { S.ui.showNotes = el.checked; try { localStorage.setItem('zjpm.notes', el.checked ? '1' : '0'); } catch (e) {} render({ keepScroll: true }); },
   attMonth: el => { if (/^\d{4}-\d{2}$/.test(el.value)) go('#/boss/attendance?m=' + el.value); },
   tlClosed: el => tlGo({ closed: el.checked ? '1' : '' }),
   listAll: el => { S.ui.listAll = el.checked; try { localStorage.setItem('zjpm.listAll', el.checked ? '1' : ''); } catch (e) {} render({ keepScroll: true }); },
@@ -2443,6 +2841,12 @@ const CH = {
     const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
     const tk = L.tasks.find(t => t.id === el.closest('[data-tid]').dataset.tid); if (!tk) return;
     tk.pid = el.value; staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
+  },
+  noteProj: el => {
+    const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
+    const n = (L.notes || []).find(x => x.id === el.closest('[data-nid]').dataset.nid); if (!n) return;
+    const [osid, pid] = el.value.split('|'); n.sid = osid; n.pid = pid; n.u = now(); S.ui.lastNote = el.value;
+    staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
   },
   bossReviewed: el => {
     const sid = el.dataset.sid, date = el.dataset.date; const doc = D(sid);
