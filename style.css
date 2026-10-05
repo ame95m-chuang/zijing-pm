@@ -808,9 +808,6 @@ main.wide{max-width:none}
 .si.cancel{text-decoration:line-through;opacity:.6}
 .si-tag{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;background:#D97706;color:#fff;border-radius:3px;padding:0 5px;text-decoration:none}
 .si-tag.cl{background:var(--line2);color:var(--ink2)}
-.sched-legend{border-collapse:collapse;font-size:12.5px;width:100%}
-.sched-legend th,.sched-legend td{border:1px solid #DDE2E8;padding:3px 8px;text-align:left}
-.sched-legend th{background:#F1F3F5;color:var(--ink2)}
 .who-chip{display:inline-block;font-size:12px;font-weight:700;color:#fff;background:var(--c);border-radius:3px;padding:0 7px;margin:1px 3px 1px 0}
 .sc-list{display:grid;gap:10px;margin-bottom:12px}
 .sc-row{display:grid;grid-template-columns:170px 1fr 120px 100px auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:8px}
@@ -931,3 +928,10 @@ main.wide{max-width:none}
 .memo-reset{grid-column:1/-1;font-size:12px;color:var(--ink2);display:flex;gap:8px;align-items:center}
 .btn.primary-soft{background:var(--ame-tint);border-color:var(--ame-soft);color:var(--ame-deep)}
 @media (max-width:720px){.memo-addrow{grid-template-columns:1fr}.memo-del{opacity:1}}
+
+/* 期程表下方的精簡專案對照 */
+.sched-legend{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12.5px;line-height:1.6;padding:6px 2px 0;border-top:1px solid #DDE2E8}
+.sl-item{display:inline-flex;align-items:center;white-space:nowrap}
+.sl-item b{font-weight:700;margin-right:2px}
+.sl-item i{font-style:normal;font-weight:700;color:var(--c);margin-left:2px}
+.sl-item i::before{content:"｜";color:#9AA3AD;font-weight:400;margin-right:2px}

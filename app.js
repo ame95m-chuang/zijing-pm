@@ -2111,9 +2111,10 @@ function schedTableHTML(start, mode) {
     }).join('');
     return `<tr class="${off ? 'off' : ''} ${d === t ? 'today' : ''}"><td class="c-date">${d.slice(5).replace('-', '')}</td><td class="c-dow">${WEEK[dowOf(d)]}</td>${mid}<td class="c-ms">${msHTML}</td></tr>`;
   }).join('');
-  // 專案一覽（負責／參與）
+  // 專案對照（精簡）：簡稱｜負責｜參與…，人員用代號字首（例如 莊、彤）
+  const abbr = st => esc(st.prefix || String(st.name || '').replace(/^阿/, '').slice(0, 1));
   const projRows = CFG().staff.filter(s => S.docs[s.id]).flatMap(o => sortedProjects(D(o.id), false).map(p => ({ o, p, parts: participantsOf(o.id, p.id) })));
-  const legend = projRows.length ? `<table class="sched-legend"><thead><tr><th>專案</th><th>委託單位</th><th>負責</th><th>參與</th></tr></thead><tbody>${projRows.map(x => `<tr><td><b style="color:${esc(x.p.color)}">${esc(shortOf(x.p))}</b>　${esc(x.p.name)}</td><td>${esc(x.p.client || '')}</td><td><span class="who-chip" style="--c:${esc(x.o.color)}">${esc(x.o.name)}</span></td><td>${x.parts.map(s => `<span class="who-chip" style="--c:${esc(s.color)}">${esc(s.name)}</span>`).join('')}</td></tr>`).join('')}</tbody></table>` : '';
+  const legend = projRows.length ? `<div class="sched-legend" aria-label="專案對照">${projRows.map(x => `<span class="sl-item" title="${esc(fullOf(x.p))}"><b style="color:${esc(x.p.color)}">${esc(shortOf(x.p))}</b>${[x.o].concat(x.parts).map(s => `<i style="--c:${esc(s.color)}">${abbr(s)}</i>`).join('')}</span>`).join('')}</div>` : '';
   const end = dates[dates.length - 1];
   return `<div class="sched-sheet" id="sched-sheet">
     <h2 class="sched-title">工作期程表（${start.replace(/-/g, '/')}–${end.slice(5).replace('-', '/')}）${mode === 'draft' ? `<span class="sched-ver">${dr && dr.status === 'applied' ? '調整版本・已確認' : '調整版本'}</span>` : '<span class="sched-ver orig">員工原排</span>'}</h2>
