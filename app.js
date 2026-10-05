@@ -101,7 +101,7 @@ const S = {
   docs: {},              // sid -> {rev, data}
   fetchedAt: {},
   route: {},
-  ui: { showClosed: false, filters: {}, showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
+  ui: { showClosed: false, filters: {}, ptMs: (() => { try { return localStorage.getItem('zjpm.ptms') !== '0'; } catch (e) { return true; } })(), showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
   unlocked: JSON.parse(sessionStorage.getItem('zjpm.unlock') || '{}'),
 };
 const CFG = () => S.config.data;
@@ -659,8 +659,9 @@ function route(parts, q) {
     const st = staffOf(b);
     if (!st || !S.docs[b]) { go('#/', true); return null; }
     if (st.pin && !S.unlocked[b]) return viewGate(b, location.hash);
-    document.title = `${st.name}｜${c === 'log' ? '工作日誌' : '專案期程'}`;
+    document.title = `${st.name}｜${c === 'log' ? '工作日誌' : c === 'tasks' ? '自排工作' : '專案期程'}`;
     if (c === 'log') return viewStaffLog(b, d, q);
+    if (c === 'tasks') return viewTasks(b, q);
     return viewPlan(b, c === 'plan' ? d : null, parts[4], q);
   }
   if (a === 'boss') {
@@ -686,6 +687,7 @@ function topbar(ctx) {
     mid = `<div class="who"><span class="dot" style="--c:${esc(st.color)}"></span>${esc(st.name)}</div>
       <nav class="tabs" aria-label="分頁">
         <a class="${ctx.tab === 'plan' ? 'on' : ''}" href="#/s/${st.id}/plan">專案期程</a>
+        <a class="${ctx.tab === 'tasks' ? 'on' : ''}" href="#/s/${st.id}/tasks">自排工作</a>
         <a class="${ctx.tab === 'log' ? 'on' : ''}" href="#/s/${st.id}/log">工作日誌</a>
       </nav>`;
   } else if (ctx.mode === 'boss') {
@@ -741,7 +743,7 @@ function viewHome() {
     return `<article class="staff-card" style="--c:${esc(st.color)}">
       <h2>${esc(st.name)}</h2>
       <div class="meta">${act ? `進行中專案 ${act} 個` : '尚未建立專案'}<br>今天有 ${todayMs} 項重要期程${tasks ? `、${tasks} 項自排工作` : ''}</div>
-      <div class="row"><a class="btn" href="#/s/${st.id}/plan">專案期程</a><a class="btn primary" href="#/s/${st.id}/log">工作日誌</a></div>
+      <div class="row three"><a class="btn" href="#/s/${st.id}/plan">專案期程</a><a class="btn" href="#/s/${st.id}/tasks">自排工作</a><a class="btn primary" href="#/s/${st.id}/log">工作日誌</a></div>
     </article>`;
   };
   const col = (role, name) => { const list = CFG().staff.filter(s => (s.role === 'design' ? 'design' : 'pm') === role); return `<div class="staff-col"><h3>${name}<small>${list.length} 人</small></h3>${list.map(card).join('') || '<p class="muted small">尚未設定這個職務的人員。</p>'}</div>`; };
@@ -1382,7 +1384,7 @@ function dayHTML(sid, date, readOnly) {
   const main = `<div>
     <section class="blk" aria-labelledby="h-auto"><div class="blk-h"><h3 id="h-auto">重要期程</h3><span class="sub">由「專案期程」自動帶入</span></div>
       ${autoRows || `<p class="muted small" style="margin:0">這天沒有專案期程。${readOnly ? '' : '在「專案期程」填寫後會自動出現在這裡。'}</p>`}</section>
-    <section class="blk" aria-labelledby="h-self"><div class="blk-h"><h3 id="h-self">自排工作</h3><span class="sub">當天自己安排的其他工作</span></div>
+    <section class="blk" aria-labelledby="h-self"><div class="blk-h"><h3 id="h-self">自排工作</h3><span class="sub">當天自己安排的其他工作${readOnly ? '' : `・<a href="#/s/${sid}/tasks?d=${date}">到「自排工作」預排兩週 ›</a>`}</span></div>
       ${taskRows || (readOnly ? '<p class="muted small" style="margin:0">沒有填寫自排工作。</p>' : '')}
       ${readOnly ? '' : `<div class="add-row noprint"><button class="btn" data-act="addTask">＋ 新增工作</button>
         ${carry && carry.items.length ? `<button class="btn" data-act="carry">帶入 ${mdw(carry.from)} 未完成的 ${carry.items.length} 項</button>` : ''}</div>`}
@@ -2270,6 +2272,90 @@ async function schedExport(kind) {
 }
 
 /* =====================================================================
+ * 同仁分頁：自排工作（兩週一頁，類似原本的 Excel 期程表）
+ * 路由：#/s/:sid/tasks?d=日期
+ * 這裡的每一項就是工作日誌的「自排工作」（logs[日期].tasks），
+ * 所以會同步出現在工作日誌、主管的全員總覽與工作期程表。
+ * ===================================================================== */
+const PT_DAYS = 14;
+
+function viewTasks(sid, q) {
+  const t = todayStr();
+  const start = mondayOf(isDate(q.d) ? q.d : t);
+  const dates = []; for (let i = 0; i < PT_DAYS; i++) dates.push(addDays(start, i));
+  const end = dates[dates.length - 1];
+  const doc = D(sid), vdoc = V(sid);
+  const projects = sortedProjects(vdoc, false);
+  const showMs = S.ui.ptMs;
+  const link = d => `#/s/${sid}/tasks?d=${d}`;
+
+  const projOpts = cur => `<option value="">其他／雜事</option>` + projects.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(shortOf(p))}｜${esc(p.name)}</option>`).join('')
+    + (cur && !projects.some(p => p.id === cur) ? (() => { const p = byId(vdoc.projects, cur); return p ? `<option value="${p.id}" selected>${esc(shortOf(p))}｜${esc(p.name)}</option>` : ''; })() : '');
+  const bossLabel = (tk) => {
+    const b = tk.boss; if (!b) return '';
+    const nm = id => staffOf(id) ? staffOf(id).name : '';
+    const txt = b.kind === 'add' ? '主管新增' : b.kind === 'edit' ? `主管修改${b.old ? `（原：${b.old}）` : ''}`
+      : b.kind === 'move' ? (b.fromSid && b.fromSid !== sid ? `主管改派：原由 ${nm(b.fromSid)} 負責` : `主管調整：由 ${mdw(b.from)} 改到這天`)
+      : b.kind === 'out' ? `主管改到 ${mdw(b.to)}${b.toSid && b.toSid !== sid ? `，改由 ${nm(b.toSid)} 負責` : ''}` : b.kind === 'remove' ? '主管取消' : '主管調整';
+    return `<div class="boss-tag">${esc(txt)}</div>`;
+  };
+
+  let lastMonth = '';
+  const rows = dates.map((d, i) => {
+    const L = doc.logs[d];
+    const tasks = (L && L.tasks) || [];
+    const off = isOff(d), h = HOL[d];
+    const items = tasks.map(tk => {
+      const p = tk.pid ? byId(vdoc.projects, tk.pid) : null;
+      const s = ST[tk.status || ''] || ST[''];
+      return `<div class="pt-item st-${s.cls} ${tk.boss ? 'boss-adj' : ''}" data-tid="${tk.id}" data-date="${d}">
+        <select class="pt-proj" data-ch="ptProj" style="--c:${p ? esc(p.color) : 'var(--line)'}" aria-label="專案標籤">${projOpts(tk.pid || '')}</select>
+        <textarea class="pt-in" data-in="ptText" data-key="ptKey" data-auto rows="1" placeholder="輸入工作內容，按 Enter 新增下一項" aria-label="${md(d)} 的工作">${esc(tk.text || '')}</textarea>
+        ${tk.status ? `<span class="pt-st ${s.cls}" title="在工作日誌標記的狀態">${s.t}${tk.status === 'moved' && tk.movedTo ? ` ${md(tk.movedTo)}` : ''}</span>` : ''}
+        <button class="icon-btn pt-del" data-act="ptDel" aria-label="刪除這項工作" title="刪除">✕</button>
+        ${bossLabel(tk)}
+      </div>`;
+    }).join('');
+    const ms = showMs ? milestonesOn(vdoc, d).map(({ m, p, cont }) => `<a class="pt-msi ${cont ? 'cont' : ''}" href="#/s/${sid}/plan/p/${p.id}?m=${m.date.slice(0, 7)}&focus=${m.date}" title="${esc(fullOf(p))}">${cont ? '↳ ' : ''}<b style="color:${esc(p.color)}">${esc(shortOf(p))}</b>｜${esc(m.text.trim().split('\n')[0])}${m.side === 'client' ? '<span class="tag client">單位</span>' : ''}${m.tentative ? '<span class="tag tent">待確認</span>' : ''}</a>`).join('') : '';
+    const monthHead = d.slice(0, 7) !== lastMonth ? `<tr class="pt-month"><td colspan="${showMs ? 5 : 4}">${d.slice(0, 4)} 年 ${+d.slice(5, 7)} 月</td></tr>` : '';
+    lastMonth = d.slice(0, 7);
+    return `${monthHead}<tr class="${off ? 'off' : ''} ${d === t ? 'today' : ''} ${d < t ? 'past' : ''} ${dowOf(d) === 1 && i ? 'wk-start' : ''}">
+      <td class="pt-date"><a href="#/s/${sid}/log/${d}" title="打開 ${md(d)} 的工作日誌">${pad2(+d.slice(5, 7))}/${pad2(+d.slice(8))}</a>${d === t ? '<small>今天</small>' : ''}</td>
+      <td class="pt-dow">${WEEK[dowOf(d)]}</td>
+      <td class="pt-hol">${h ? esc(h.name) : ''}</td>
+      ${showMs ? `<td class="pt-ms">${ms}</td>` : ''}
+      <td class="pt-tasks">${(() => { const lv = Object.entries(LEAVE_NAME).filter(([k]) => num(((L && L.hours) || {})[k])).map(([k, n]) => `◆${n} ${num(L.hours[k])}h`).join('　'); return lv ? `<div class="pt-leave">${esc(lv)}</div>` : ''; })()}${items}<button class="pt-add" data-act="ptAdd" data-date="${d}" title="新增 ${md(d)} 的工作">＋ 新增</button></td>
+    </tr>`;
+  }).join('');
+
+  document.title = `${staffOf(sid).name}｜自排工作`;
+  return topbar({ mode: 'staff', sid, tab: 'tasks' }) + `<main>
+    <div class="page-head"><div><h1>自排工作</h1><p>預排未來兩週的工作。這裡填的內容就是工作日誌的「自排工作」，主管的工作期程表也會同步看到。</p></div></div>
+    <div class="cal-bar noprint">
+      <div class="cal-nav"><a class="icon-btn" href="${link(addDays(start, -7))}" aria-label="前一週">‹</a><a class="btn sm" href="${link(t)}">本週</a><a class="icon-btn" href="${link(addDays(start, 7))}" aria-label="後一週">›</a>
+        <h3>${md(start)}–${md(end)}</h3></div>
+      <input type="date" data-ch="ptJump" value="${start}" aria-label="跳到日期">
+      <span class="grow"></span>
+      <label class="chk"><input type="checkbox" data-ch="ptMs" ${showMs ? 'checked' : ''}> 顯示重要期程</label>
+      <button class="btn sm" data-act="print">列印</button>
+    </div>
+    <div class="pt-wrap"><table class="pt-table ${showMs ? '' : 'no-ms'}">
+      <thead><tr><th class="pt-date">日期</th><th class="pt-dow">星期</th><th class="pt-hol">節日</th>${showMs ? '<th class="pt-ms">重要期程</th>' : ''}<th class="pt-tasks">自排期程</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="muted small noprint" style="margin-top:12px">提示：在工作內容按 Enter 會新增下一項；點日期可打開當天的工作日誌，標記完成狀態。主管調整過的項目會以琥珀色標示。</p>
+  </main>`;
+}
+
+/* 找到某一天的某項工作 */
+function ptFind(sid, date, tid) {
+  const L = getLog(D(sid), date, true);
+  return { L, tk: (L.tasks || []).find(x => x.id === tid) };
+}
+function ptFocus(tid) {
+  S.afterRender = () => { const el = document.querySelector(`.pt-item[data-tid="${tid}"] .pt-in`); if (el) { el.focus(); const v = el.value.length; el.setSelectionRange(v, v); } };
+}
+
+/* =====================================================================
  * 匯入專案期程：① 專案匯入檔（JSON）② 直接貼上文字（逗號分隔或從 Excel 複製）
  * ===================================================================== */
 
@@ -2938,6 +3024,21 @@ const ACT = {
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
   openSearch: () => openSearch(),
+  ptAdd: el => {
+    const sid = S.route.parts[1], date = el.dataset.date;
+    const L = getLog(D(sid), date, true);
+    const empty = (L.tasks || []).find(x => !(x.text || '').trim());
+    if (empty) { const n = document.querySelector(`.pt-item[data-tid="${empty.id}"] .pt-in`); if (n) { n.focus(); return; } }
+    const last = L.tasks[L.tasks.length - 1];
+    const tk = { id: uid(), text: '', pid: last ? last.pid || '' : '', status: '', note: '' };
+    L.tasks.push(tk); staffTouchLog(L); touchStaff(sid); ptFocus(tk.id); render({ keepScroll: true });
+  },
+  ptDel: async el => {
+    const sid = S.route.parts[1], it = el.closest('.pt-item');
+    const { L, tk } = ptFind(sid, it.dataset.date, it.dataset.tid); if (!tk) return;
+    if ((tk.text || '').trim() && !(await confirmBox('刪除工作', `確定刪除「${tk.text}」？\n工作日誌中的這一項也會一併刪除。`, '刪除', true))) return;
+    L.tasks = L.tasks.filter(x => x.id !== tk.id); staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
+  },
   schedNewDraft: async el => {
     const start = el.dataset.start;
     if (draftOf(start) && !(await confirmBox('建立新的調整版本', '會以目前的員工原排重新建立一份調整版本，取代舊的版本。', '建立'))) return;
@@ -3102,6 +3203,12 @@ const IN = {
     const v = el.value.trim().toLowerCase();
     $$('.proj-list li[data-q]').forEach(li => { li.hidden = !!v && !li.dataset.q.includes(v); });
   },
+  ptText: el => {
+    const sid = S.route.parts[1], it = el.closest('.pt-item');
+    const { L, tk } = ptFind(sid, it.dataset.date, it.dataset.tid);
+    if (tk) { tk.text = el.value; staffTouchLog(L); touchStaff(sid); }
+    autosize(el);
+  },
   noteText: el => {
     const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
     const n = (L.notes || []).find(x => x.id === el.closest('[data-nid]').dataset.nid);
@@ -3131,6 +3238,13 @@ const CH = {
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
   tlWho: el => tlGo({ who: el.value }),
   caseOwner: el => casesGo({ owner: el.value }),
+  ptProj: el => {
+    const sid = S.route.parts[1], it = el.closest('.pt-item');
+    const { L, tk } = ptFind(sid, it.dataset.date, it.dataset.tid); if (!tk) return;
+    tk.pid = el.value; staffTouchLog(L); touchStaff(sid); render({ keepScroll: true });
+  },
+  ptMs: el => { S.ui.ptMs = el.checked; try { localStorage.setItem('zjpm.ptms', el.checked ? '1' : '0'); } catch (e) {} render({ keepScroll: true }); },
+  ptJump: el => { if (isDate(el.value)) go(`#/s/${S.route.parts[1]}/tasks?d=${el.value}`); },
   caseWho: el => casesGo({ who: el.value }),
   caseSt: el => casesGo({ st: el.value === 'active' ? '' : el.value }),
   calNotes: el => { S.ui.showNotes = el.checked; try { localStorage.setItem('zjpm.notes', el.checked ? '1' : '0'); } catch (e) {} render({ keepScroll: true }); },
@@ -3202,6 +3316,18 @@ document.addEventListener('change', e => { const el = e.target; if (el.dataset &
 document.addEventListener('keydown', e => {
   const el = e.target;
   if (e.key === 'Enter' && el.dataset && el.dataset.act === 'rowGo') { ACT.rowGo(el); return; }
+  if (e.key === 'Enter' && !e.shiftKey && el.dataset && el.dataset.key === 'ptKey' && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    const sid = S.route.parts[1], it = el.closest('.pt-item'), date = it.dataset.date;
+    const { L } = ptFind(sid, date, it.dataset.tid);
+    const idx = L.tasks.findIndex(x => x.id === it.dataset.tid);
+    const next = L.tasks[idx + 1];
+    if (next && !(next.text || '').trim()) { const n = document.querySelector(`.pt-item[data-tid="${next.id}"] .pt-in`); if (n) n.focus(); return; }
+    if (!(el.value || '').trim()) return;
+    const tk = { id: uid(), text: '', pid: L.tasks[idx] ? L.tasks[idx].pid || '' : '', status: '', note: '' };
+    L.tasks.splice(idx + 1, 0, tk); staffTouchLog(L); touchStaff(sid); ptFocus(tk.id); render({ keepScroll: true });
+    return;
+  }
   if (e.key === 'Enter' && el.dataset && el.dataset.key === 'taskKey' && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
