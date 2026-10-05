@@ -69,7 +69,7 @@ function defaultConfig() {
     holidays: DEFAULT_HOLIDAYS,
   };
 }
-function emptyStaff() { return { projects: [], milestones: [], logs: {}, deleted: {}, links: [] }; }
+function emptyStaff() { return { projects: [], milestones: [], logs: {}, deleted: {}, links: [], memos: [] }; }
 
 /* ---------------- small utilities ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -101,7 +101,7 @@ const S = {
   docs: {},              // sid -> {rev, data}
   fetchedAt: {},
   route: {},
-  ui: { showClosed: false, filters: {}, ptMs: (() => { try { return localStorage.getItem('zjpm.ptms') !== '0'; } catch (e) { return true; } })(), showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
+  ui: { showClosed: false, filters: {}, memoCards: {}, ptMs: (() => { try { return localStorage.getItem('zjpm.ptms') !== '0'; } catch (e) { return true; } })(), showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
   unlocked: JSON.parse(sessionStorage.getItem('zjpm.unlock') || '{}'),
 };
 const CFG = () => S.config.data;
@@ -252,6 +252,7 @@ function normalizeStaff(x) {
   out.logs = d.logs && typeof d.logs === 'object' && !Array.isArray(d.logs) ? d.logs : {};
   out.deleted = d.deleted && typeof d.deleted === 'object' && !Array.isArray(d.deleted) ? d.deleted : {};
   out.links = Array.isArray(d.links) ? d.links.filter(l => l && l.id && l.sid && l.pid) : [];
+  out.memos = Array.isArray(d.memos) ? d.memos.filter(m => m && m.id) : [];
   Object.keys(out.logs).forEach(k => {
     const L = out.logs[k];
     if (!L || typeof L !== 'object') { delete out.logs[k]; return; }
@@ -275,6 +276,7 @@ function mergeStaff(a, b) {
   out.projects = mergeArr(a.projects, b.projects);
   out.milestones = mergeArr(a.milestones, b.milestones);
   out.links = mergeArr(a.links || [], b.links || []);
+  out.memos = mergeArr(a.memos || [], b.memos || []);
   // 同一格出現兩筆時合併文字
   const seen = {};
   out.milestones = out.milestones.filter(m => {
@@ -659,7 +661,8 @@ function route(parts, q) {
     const st = staffOf(b);
     if (!st || !S.docs[b]) { go('#/', true); return null; }
     if (st.pin && !S.unlocked[b]) return viewGate(b, location.hash);
-    document.title = `${st.name}｜${c === 'log' ? '工作日誌' : c === 'tasks' ? '自排工作' : '專案期程'}`;
+    document.title = `${st.name}｜${c === 'log' ? '工作日誌' : c === 'tasks' ? '自排工作' : c === 'memo' ? '備忘錄' : '專案期程'}`;
+    if (c === 'memo') return viewMemo(b, q);
     if (c === 'log') return viewStaffLog(b, d, q);
     if (c === 'tasks') return viewTasks(b, q);
     return viewPlan(b, c === 'plan' ? d : null, parts[4], q);
@@ -689,6 +692,7 @@ function topbar(ctx) {
         <a class="${ctx.tab === 'plan' ? 'on' : ''}" href="#/s/${st.id}/plan">專案期程</a>
         <a class="${ctx.tab === 'tasks' ? 'on' : ''}" href="#/s/${st.id}/tasks">自排工作</a>
         <a class="${ctx.tab === 'log' ? 'on' : ''}" href="#/s/${st.id}/log">工作日誌</a>
+        <a class="${ctx.tab === 'memo' ? 'on' : ''}" href="#/s/${st.id}/memo">備忘錄</a>
       </nav>`;
   } else if (ctx.mode === 'boss') {
     mid = `<div class="who boss">主管檢視</div>
@@ -743,7 +747,7 @@ function viewHome() {
     return `<article class="staff-card" style="--c:${esc(st.color)}">
       <h2>${esc(st.name)}</h2>
       <div class="meta">${act ? `進行中專案 ${act} 個` : '尚未建立專案'}<br>今天有 ${todayMs} 項重要期程${tasks ? `、${tasks} 項自排工作` : ''}</div>
-      <div class="row three"><a class="btn" href="#/s/${st.id}/plan">專案期程</a><a class="btn" href="#/s/${st.id}/tasks">自排工作</a><a class="btn primary" href="#/s/${st.id}/log">工作日誌</a></div>
+      <div class="row four"><a class="btn" href="#/s/${st.id}/plan">專案期程</a><a class="btn" href="#/s/${st.id}/tasks">自排工作</a><a class="btn" href="#/s/${st.id}/log">工作日誌</a><a class="btn" href="#/s/${st.id}/memo">備忘錄</a></div>
     </article>`;
   };
   const col = (role, name) => { const list = CFG().staff.filter(s => (s.role === 'design' ? 'design' : 'pm') === role); return `<div class="staff-col"><h3>${name}<small>${list.length} 人</small></h3>${list.map(card).join('') || '<p class="muted small">尚未設定這個職務的人員。</p>'}</div>`; };
@@ -751,7 +755,7 @@ function viewHome() {
   return topbar({}) + `<main class="home">
     <div class="home-cal">${tearOff(t)}
       <nav class="home-nav" aria-label="其他功能">
-        <a class="btn primary" href="#/boss">主管檢視</a>
+        <a class="btn" href="#/boss">主管檢視</a>
         <a class="btn" href="#/projects">專案總覽</a>
         <a class="btn" href="#/settings">系統設定</a>
       </nav>
@@ -759,8 +763,6 @@ function viewHome() {
     </div>
     <section>
       ${modeNotice()}
-      <h1>請選擇你的名字</h1>
-      <p class="lead">專案期程用來排定各專案的重要日期；工作日誌會自動帶入當天的期程，再加上自己安排的工作。</p>
       ${cards || '<div class="empty">尚未建立人員，請到系統設定新增。</div>'}
     </section>
   </main>`;
@@ -769,6 +771,18 @@ function viewHome() {
 /* ---------------- PIN gate ---------------- */
 function viewGate(who, back) {
   const isBoss = who === 'boss';
+  if (String(who).startsWith('memo:')) {
+    const ms = staffOf(who.slice(5));
+    S.gate = { who, back };
+    return topbar({ mode: 'staff', sid: ms.id, tab: 'memo' }) + `<main><form class="gate" data-sub="gate">
+    <h1>${esc(ms.name)} 的備忘錄</h1>
+    <p>備忘錄有設定密碼，請輸入後繼續。忘記密碼時，可請管理者到「系統設定 → 人員」重設。</p>
+    <label class="sr" for="gatepin">備忘錄密碼</label>
+    <input id="gatepin" type="password" autocomplete="off" autofocus>
+    <div class="err" id="gateerr"></div>
+    <div class="row"><button class="btn primary" type="submit">解鎖</button><a class="btn ghost" href="#/s/${ms.id}/log">返回</a></div>
+  </form></main>`;
+  }
   const st = isBoss ? null : staffOf(who);
   S.gate = { who, back };
   return topbar({}) + `<main><form class="gate" data-sub="gate">
@@ -783,7 +797,8 @@ function viewGate(who, back) {
 function submitGate(form) {
   const v = $('#gatepin', form).value;
   const { who, back } = S.gate || {};
-  const ok = who === 'boss' ? v === CFG().bossPin : (staffOf(who) && v === staffOf(who).pin);
+  const isMemo = String(who).startsWith('memo:');
+  const ok = who === 'boss' ? v === CFG().bossPin : isMemo ? (staffOf(who.slice(5)) && memoHash(who.slice(5), v) === staffOf(who.slice(5)).memoPin) : (staffOf(who) && v === staffOf(who).pin);
   if (!ok) { $('#gateerr').textContent = '密碼不正確，請再試一次。'; $('#gatepin').select(); return; }
   S.unlocked[who === 'boss' ? '__boss' : who] = true;
   sessionStorage.setItem('zjpm.unlock', JSON.stringify(S.unlocked));
@@ -1393,6 +1408,7 @@ function dayHTML(sid, date, readOnly) {
       ${noteRows || (readOnly ? '<p class="muted small" style="margin:0">這天沒有專案紀事。</p>' : '')}
       ${readOnly ? '' : (projects.length ? `<div class="add-row noprint"><button class="btn" data-act="addNote">＋ 新增紀事</button></div>` : '<p class="muted small" style="margin:0">建立或加入專案後，就可以記錄專案紀事。</p>')}
     </section>
+    ${readOnly ? '' : memoLogBlock(sid)}
     <section class="blk" aria-labelledby="h-hours"><div class="blk-h"><h3 id="h-hours">出勤時數</h3><span class="sub">單位：小時，沒有就留空</span></div>
       ${readOnly ? (hours.trim() || '<span class="muted small">無</span>') : `<div class="hours">${hours}</div>`}</section>
     <section class="blk" aria-labelledby="h-rem"><div class="blk-h"><h3 id="h-rem">外包／其他備註</h3></div>
@@ -1831,6 +1847,7 @@ function projectHomeHTML(ownerSid, p, opt = {}) {
         : `<p class="muted small" style="margin:0">還沒有紀事。${canNote ? '' : '負責人與參與的設計可以在工作日誌或自己的專案首頁新增。'}</p>`}
       ${!opt.allNotes && notes.length > shown.length ? `<button class="btn sm" data-act="phAllNotes">看全部 ${notes.length} 則</button>` : ''}
     </section>
+    ${opt.sid ? memoProjectBlock(opt.sid, ownerSid, p) : ''}
     <section class="ph-card"><div class="ph-h"><h3>未來三個月</h3><span class="muted small">本專案的期程與紀事</span></div>${miniTimeline(ownerSid, p)}</section>
   </div>`;
 }
@@ -2353,6 +2370,130 @@ function ptFind(sid, date, tid) {
 }
 function ptFocus(tid) {
   S.afterRender = () => { const el = document.querySelector(`.pt-item[data-tid="${tid}"] .pt-in`); if (el) { el.focus(); const v = el.value.length; el.setSelectionRange(v, v); } };
+}
+
+/* =====================================================================
+ * 備忘錄：同仁個人的備忘事項（依專案分組，像一張張便利貼）
+ * 資料：存在同仁自己的資料檔 doc.memos = [{ id, sid, pid, text, done, at, u }]
+ *       sid＋pid 指向專案（可為自己負責或參與的專案），pid 為空代表「一般」
+ * 不會出現在專案總覽、搜尋與主管檢視。可另外設定「備忘錄密碼」只鎖住備忘錄。
+ * 路由：#/s/:sid/memo
+ * ===================================================================== */
+
+/** 密碼不直接存原文（輕量保護） */
+function memoHash(sid, pin) {
+  let h = 0x811c9dc5; const s = 'zjmemo:' + sid + ':' + pin;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return 'h' + h.toString(16);
+}
+const memoLocked = sid => { const st = staffOf(sid); return !!(st && st.memoPin) && !S.unlocked['memo:' + sid]; };
+const memosOf = sid => (S.docs[sid] ? (D(sid).memos || []) : []).filter(m => m && m.id);
+function memoProj(sid, m) {
+  if (!m.pid) return null;
+  return S.docs[m.sid] ? byId(D(m.sid).projects, m.pid) : null;
+}
+
+/** 一則備忘（可打勾、直接修改、刪除） */
+function memoItemHTML(m) {
+  return `<li class="memo-item ${m.done ? 'done' : ''}" data-mid="${m.id}">
+    <label class="memo-chk"><input type="checkbox" data-ch="memoDone" ${m.done ? 'checked' : ''} aria-label="完成"></label>
+    <textarea class="memo-in" data-in="memoText" data-key="memoKey" data-auto rows="1" aria-label="備忘內容">${esc(m.text || '')}</textarea>
+    <button class="icon-btn memo-del" data-act="memoDel" aria-label="刪除" title="刪除">✕</button>
+  </li>`;
+}
+function memoAddHTML(owner, pid, ph) {
+  return `<div class="memo-add" data-owner="${esc(owner || '')}" data-pid="${esc(pid || '')}">
+    <input type="text" class="memo-new" data-key="memoNew" placeholder="${esc(ph || '＋ 新增備忘，按 Enter 加入')}" aria-label="新增備忘">
+  </div>`;
+}
+function memoLockedHTML(sid) {
+  return `<div class="memo-lock"><span>🔒 備忘錄已上鎖</span><a class="btn sm" href="#/s/${sid}/memo">解鎖</a></div>`;
+}
+
+/** 專案首頁下方的「我的備忘錄」 */
+function memoProjectBlock(sid, ownerSid, p) {
+  const list = memosOf(sid).filter(m => m.sid === ownerSid && m.pid === p.id).sort((a, b) => (a.done - b.done) || (a.at - b.at));
+  return `<section class="ph-card memo-blk noprint"><div class="ph-h"><h3>我的備忘錄</h3><span class="muted small">只有自己看得到，不會出現在專案總覽與搜尋</span><span class="grow"></span><a class="small" href="#/s/${sid}/memo">全部備忘 ›</a></div>
+    ${memoLocked(sid) ? memoLockedHTML(sid) : `<ul class="memo-list">${list.map(memoItemHTML).join('')}</ul>${memoAddHTML(ownerSid, p.id)}`}</section>`;
+}
+
+/** 工作日誌「專案紀事」下方的「我的備忘錄」：列出未完成的備忘，並可新增 */
+function memoLogBlock(sid) {
+  const head = `<div class="blk-h"><h3>我的備忘錄</h3><span class="sub">只有自己看得到・<a href="#/s/${sid}/memo">打開備忘錄 ›</a></span></div>`;
+  if (memoLocked(sid)) return `<section class="blk memo-blk noprint">${head}${memoLockedHTML(sid)}</section>`;
+  const open = memosOf(sid).filter(m => !m.done);
+  const groups = {};
+  open.forEach(m => { const k = m.pid ? m.sid + '|' + m.pid : ''; (groups[k] = groups[k] || []).push(m); });
+  const keys = Object.keys(groups).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1));
+  const projects = sortedProjects(V(sid), false);
+  const body = keys.map(k => {
+    const p = k ? memoProj(sid, groups[k][0]) : null;
+    return `<div class="memo-group"><div class="memo-gh" style="--c:${p ? esc(p.color) : 'var(--ink3)'}">${p ? esc(shortOf(p)) + '｜' + esc(p.name) : '一般'}</div><ul class="memo-list">${groups[k].map(memoItemHTML).join('')}</ul></div>`;
+  }).join('');
+  return `<section class="blk memo-blk noprint">${head}
+    ${body || '<p class="muted small" style="margin:0 0 8px">目前沒有未完成的備忘。</p>'}
+    <div class="memo-addrow"><select class="memo-proj" aria-label="備忘所屬專案"><option value="|">一般（不屬於專案）</option>${projects.map(p => `<option value="${esc(ownerOf(sid, p) + '|' + p.id)}">${esc(shortOf(p))}｜${esc(p.name)}</option>`).join('')}</select>
+      <input type="text" class="memo-new" data-key="memoNew" data-from-select="1" placeholder="新增備忘，按 Enter 加入" aria-label="新增備忘"></div>
+  </section>`;
+}
+
+/* ---------------- 備忘錄分頁 ---------------- */
+function viewMemo(sid, q) {
+  const st = staffOf(sid);
+  if (memoLocked(sid)) return viewGate('memo:' + sid, location.hash);
+  const all = memosOf(sid);
+  const showDone = q.done === '1';
+  const groups = {};
+  all.forEach(m => { const k = m.pid ? m.sid + '|' + m.pid : ''; (groups[k] = groups[k] || []).push(m); });
+  // 只有新增卡片但還沒有內容的專案
+  (S.ui.memoCards[sid] || []).forEach(k => { if (!groups[k]) groups[k] = []; });
+  const keys = Object.keys(groups).sort((a, b) => {
+    const la = Math.max(0, ...groups[a].map(m => m.u || 0)), lb = Math.max(0, ...groups[b].map(m => m.u || 0));
+    return lb - la;
+  });
+  const projects = sortedProjects(V(sid), false);
+  const cards = keys.map(k => {
+    const [osid, pid] = k ? k.split('|') : ['', ''];
+    const p = k ? (S.docs[osid] ? byId(D(osid).projects, pid) : null) : null;
+    const list = groups[k].slice().sort((a, b) => (a.done - b.done) || (a.at - b.at));
+    const openN = list.filter(m => !m.done).length, doneN = list.length - openN;
+    const shown = showDone ? list : list.filter(m => !m.done);
+    return `<article class="memo-card" style="--c:${p ? esc(p.color) : '#8D97A4'}">
+      <header><b>${p ? esc(shortOf(p)) : '一般'}</b><span>${p ? esc(p.name) : '不屬於專案的備忘'}</span><em>${openN} 項待辦</em></header>
+      <ul class="memo-list">${shown.map(memoItemHTML).join('') || `<li class="memo-empty">${doneN ? '全部完成了 👍' : '還沒有備忘事項'}</li>`}</ul>
+      ${memoAddHTML(k ? osid : '', k ? pid : '')}
+      ${doneN ? `<footer><button class="link-btn" data-act="memoClear" data-key="${esc(k)}">清除已完成（${doneN}）</button></footer>` : ''}
+    </article>`;
+  }).join('');
+  const used = new Set(keys);
+  const addOpts = projects.filter(p => !used.has(ownerOf(sid, p) + '|' + p.id)).map(p => `<option value="${esc(ownerOf(sid, p) + '|' + p.id)}">${esc(shortOf(p))}｜${esc(p.name)}</option>`).join('')
+    + (used.has('') ? '' : '<option value="">一般（不屬於專案）</option>');
+  const lockBtns = st.memoPin
+    ? `<button class="btn sm" data-act="memoLock">🔒 鎖定</button><button class="btn sm" data-act="memoPinSet">變更密碼</button><button class="btn sm" data-act="memoPinOff">移除密碼</button>`
+    : `<button class="btn sm" data-act="memoPinSet">設定密碼</button>`;
+  return topbar({ mode: 'staff', sid, tab: 'memo' }) + `<main>
+    <div class="page-head"><div><h1>備忘錄</h1><p>依專案整理的個人備忘，例如查看廠商報價、回信給承辦人。只有自己看得到，不會出現在專案總覽、搜尋或主管檢視。</p></div>
+      <div class="row noprint">${lockBtns}</div></div>
+    <div class="cal-bar noprint">
+      ${addOpts ? `<select id="memo-newcard" aria-label="新增備忘卡片">${addOpts}</select><button class="btn sm primary-soft" data-act="memoCard">＋ 新增卡片</button>` : ''}
+      <span class="grow"></span>
+      <label class="chk"><input type="checkbox" data-ch="memoShowDone" ${showDone ? 'checked' : ''}> 顯示已完成</label>
+    </div>
+    ${cards ? `<div class="memo-board">${cards}</div>` : `<div class="empty"><h3>還沒有備忘錄</h3><p>從上方選一個專案，按「＋ 新增卡片」開始記錄；也可以在專案首頁或工作日誌下方新增。</p></div>`}
+  </main>`;
+}
+
+/* ---------------- 資料操作 ---------------- */
+function memoAdd(sid, owner, pid, text) {
+  text = String(text || '').trim(); if (!text) return null;
+  const doc = D(sid); doc.memos = doc.memos || [];
+  const m = { id: uid(), sid: pid ? owner : '', pid: pid || '', text, done: false, at: now(), u: now() };
+  doc.memos.push(m); touchStaff(sid);
+  return m;
+}
+function memoFind(sid, el) {
+  const li = el.closest('[data-mid]'); if (!li) return null;
+  return (D(sid).memos || []).find(m => m.id === li.dataset.mid) || null;
 }
 
 /* =====================================================================
@@ -2951,7 +3092,8 @@ function viewSettings() {
     <input type="text" data-f="prefix" value="${esc(s.prefix || '')}" aria-label="專案代號字首" placeholder="代號字首" maxlength="4">
     <input type="color" data-f="color" value="${esc(s.color)}" aria-label="代表色">
     <input type="text" data-f="pin" value="${esc(s.pin || '')}" aria-label="個人密碼" placeholder="不設密碼">
-    <button class="btn sm danger" data-act="delStaff" data-i="${i}">移除</button></div>`).join('');
+    <button class="btn sm danger" data-act="delStaff" data-i="${i}">移除</button>
+    ${s.memoPin ? `<div class="memo-reset"><span>🔒 已設定備忘錄密碼</span><button class="link-btn" data-act="memoReset" data-i="${i}">重設（移除密碼）</button></div>` : ''}</div>`).join('');
   const modeText = Store.mode === 'server' ? `共用模式：資料存於 GitHub 倉庫 ${esc(SETTINGS.dataRepo)} 的 ${esc(SETTINGS.folder || '（根目錄）')} 資料夾，所有人共用。` : '單機模式：資料只存在這台電腦的瀏覽器。';
   return topbar({ mode: 'settings' }) + `<main class="settings">
     <div class="page-head"><div><h1>系統設定</h1><p>修改後請按最下方的「儲存設定」。</p></div></div>
@@ -3024,6 +3166,58 @@ const ACT = {
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
   openSearch: () => openSearch(),
+  memoReset: el => { harvestSettings(); const s = S.setDraft.staff[+el.dataset.i]; if (s) { s.memoPin = ''; toast(`已移除 ${s.name} 的備忘錄密碼，按「儲存設定」後生效`); } render({ keepScroll: true }); },
+  memoDel: async el => {
+    const sid = S.route.parts[1], m = memoFind(sid, el); if (!m) return;
+    if ((m.text || '').trim() && !(await confirmBox('刪除備忘', `確定刪除「${m.text}」？`, '刪除', true))) return;
+    const doc = D(sid); doc.memos = doc.memos.filter(x => x.id !== m.id); doc.deleted[m.id] = now(); touchStaff(sid); render({ keepScroll: true });
+  },
+  memoClear: async el => {
+    const sid = S.route.parts[1], k = el.dataset.key || '';
+    const doc = D(sid);
+    const hit = (doc.memos || []).filter(m => m.done && (k ? m.sid + '|' + m.pid === k : !m.pid));
+    if (!hit.length || !(await confirmBox('清除已完成', `清除這張卡片中 ${hit.length} 項已完成的備忘？`, '清除'))) return;
+    const ids = new Set(hit.map(m => m.id)); doc.memos = doc.memos.filter(m => !ids.has(m.id)); hit.forEach(m => { doc.deleted[m.id] = now(); });
+    touchStaff(sid); render({ keepScroll: true });
+  },
+  memoCard: () => {
+    const sid = S.route.parts[1], sel = $('#memo-newcard'); if (!sel) return;
+    const k = sel.value; S.ui.memoCards[sid] = (S.ui.memoCards[sid] || []).concat([k]);
+    const [o, p] = k ? k.split('|') : ['', ''];
+    S.afterRender = () => { const i = document.querySelector(`.memo-add[data-owner="${o}"][data-pid="${p}"] .memo-new`); if (i) { i.focus(); i.scrollIntoView({ block: 'center' }); } };
+    render({ keepScroll: true });
+  },
+  memoLock: () => { const sid = S.route.parts[1]; delete S.unlocked['memo:' + sid]; sessionStorage.setItem('zjpm.unlock', JSON.stringify(S.unlocked)); toast('備忘錄已鎖定'); render(); },
+  memoPinSet: () => {
+    const sid = S.route.parts[1], st = staffOf(sid), has = !!st.memoPin;
+    openModal({
+      title: has ? '變更備忘錄密碼' : '設定備忘錄密碼',
+      body: `<p class="muted small" style="margin:0 0 12px">只會鎖住「備忘錄」，其他分頁不受影響。這是防止別人隨手看到的輕量保護。</p>
+        ${has ? '<label class="field"><span>目前的密碼</span><input type="password" name="cur" autocomplete="off"></label>' : ''}
+        <label class="field"><span>新密碼</span><input type="password" name="p1" autocomplete="new-password"></label>
+        <label class="field"><span>再輸入一次</span><input type="password" name="p2" autocomplete="new-password"></label>`,
+      actions: [{ label: '取消', cancel: true }, { label: '儲存', cls: 'primary', primary: true, onClick: bg => {
+        const f = n => bg.querySelector(`[name=${n}]`);
+        if (has && memoHash(sid, f('cur').value) !== st.memoPin) { toast('目前的密碼不正確', true); return false; }
+        const p1 = f('p1').value; if (!p1) { toast('請輸入新密碼', true); return false; }
+        if (p1 !== f('p2').value) { toast('兩次輸入的密碼不一樣', true); return false; }
+        st.memoPin = memoHash(sid, p1); touchConfig();
+        S.unlocked['memo:' + sid] = true; sessionStorage.setItem('zjpm.unlock', JSON.stringify(S.unlocked));
+        toast('已設定備忘錄密碼'); render({ keepScroll: true });
+      } }],
+    });
+  },
+  memoPinOff: () => {
+    const sid = S.route.parts[1], st = staffOf(sid);
+    openModal({
+      title: '移除備忘錄密碼',
+      body: '<label class="field"><span>目前的密碼</span><input type="password" name="cur" autocomplete="off"></label>',
+      actions: [{ label: '取消', cancel: true }, { label: '移除密碼', cls: 'danger', primary: true, onClick: bg => {
+        if (memoHash(sid, bg.querySelector('[name=cur]').value) !== st.memoPin) { toast('密碼不正確', true); return false; }
+        st.memoPin = ''; touchConfig(); toast('已移除備忘錄密碼'); render({ keepScroll: true });
+      } }],
+    });
+  },
   ptAdd: el => {
     const sid = S.route.parts[1], date = el.dataset.date;
     const L = getLog(D(sid), date, true);
@@ -3209,6 +3403,11 @@ const IN = {
     if (tk) { tk.text = el.value; staffTouchLog(L); touchStaff(sid); }
     autosize(el);
   },
+  memoText: el => {
+    const sid = S.route.parts[1], m = memoFind(sid, el);
+    if (m) { m.text = el.value; m.u = now(); touchStaff(sid); }
+    autosize(el);
+  },
   noteText: el => {
     const { sid, date, doc } = curLogCtx(); const L = getLog(doc, date, true);
     const n = (L.notes || []).find(x => x.id === el.closest('[data-nid]').dataset.nid);
@@ -3238,6 +3437,8 @@ const CH = {
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
   tlWho: el => tlGo({ who: el.value }),
   caseOwner: el => casesGo({ owner: el.value }),
+  memoDone: el => { const sid = S.route.parts[1], m = memoFind(sid, el); if (!m) return; m.done = el.checked; m.u = now(); touchStaff(sid); render({ keepScroll: true }); },
+  memoShowDone: el => { const sid = S.route.parts[1]; go(`#/s/${sid}/memo${el.checked ? '?done=1' : ''}`); },
   ptProj: el => {
     const sid = S.route.parts[1], it = el.closest('.pt-item');
     const { L, tk } = ptFind(sid, it.dataset.date, it.dataset.tid); if (!tk) return;
@@ -3316,6 +3517,22 @@ document.addEventListener('change', e => { const el = e.target; if (el.dataset &
 document.addEventListener('keydown', e => {
   const el = e.target;
   if (e.key === 'Enter' && el.dataset && el.dataset.act === 'rowGo') { ACT.rowGo(el); return; }
+  if (e.key === 'Enter' && el.dataset && el.dataset.key === 'memoNew' && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    const sid = S.route.parts[1]; let owner, pid, sel = '';
+    if (el.dataset.fromSelect) { sel = el.parentElement.querySelector('.memo-proj').value; [owner, pid] = sel.split('|'); }
+    else { const box = el.closest('.memo-add'); owner = box.dataset.owner; pid = box.dataset.pid; }
+    if (!memoAdd(sid, owner, pid, el.value)) return;
+    S.ui.memoSel = sel;
+    S.afterRender = () => {
+      const i = el.dataset.fromSelect ? document.querySelector('.memo-addrow .memo-new') : document.querySelector(`.memo-add[data-owner="${owner || ''}"][data-pid="${pid || ''}"] .memo-new`);
+      if (el.dataset.fromSelect) { const s2 = document.querySelector('.memo-addrow .memo-proj'); if (s2) s2.value = sel; }
+      if (i) i.focus();
+    };
+    render({ keepScroll: true });
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey && el.dataset && el.dataset.key === 'memoKey' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); el.blur(); return; }
   if (e.key === 'Enter' && !e.shiftKey && el.dataset && el.dataset.key === 'ptKey' && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     const sid = S.route.parts[1], it = el.closest('.pt-item'), date = it.dataset.date;

@@ -891,3 +891,43 @@ main.wide{max-width:none}
   .pt-del{opacity:1}
 }
 @media (max-width:720px){.pt-table tr.pt-month td{display:block}}
+
+/* ---------- 首頁按鈕：平常淺色，滑過才變深藍 ---------- */
+.home .btn,.home .btn.primary{background:var(--sheet);color:var(--ink);border:1px solid var(--line)}
+.home .btn:hover,.home .btn:focus-visible{background:var(--ame);color:#fff;border-color:var(--ame)}
+.staff-card .row.four{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.staff-card .row.four .btn{justify-content:center;padding-left:4px;padding-right:4px;font-size:14px}
+@media (max-width:980px){.staff-card .row.four{grid-template-columns:1fr 1fr}}
+
+/* ---------- 備忘錄 ---------- */
+.memo-board{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;align-items:start}
+.memo-card{background:color-mix(in srgb,var(--c) 9%,#FFFDF6);border:1px solid color-mix(in srgb,var(--c) 22%,#fff);border-top:6px solid var(--c);border-radius:4px 4px 12px 4px;box-shadow:0 2px 0 rgba(30,39,49,.04),0 8px 18px rgba(30,39,49,.08);padding:12px 14px 12px;display:grid;gap:8px;position:relative}
+.memo-card::after{content:"";position:absolute;right:0;bottom:0;width:18px;height:18px;background:linear-gradient(135deg,transparent 50%,color-mix(in srgb,var(--c) 18%,#fff) 50%);border-radius:0 0 12px 0}
+.memo-card header{display:grid;grid-template-columns:auto 1fr;column-gap:8px;align-items:baseline}
+.memo-card header b{font-size:20px;letter-spacing:.04em;color:color-mix(in srgb,var(--c) 75%,#000)}
+.memo-card header span{font-size:12.5px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.memo-card header em{grid-column:1/-1;font-style:normal;font-size:12px;color:var(--ink3)}
+.memo-card footer{text-align:right}
+.memo-list{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.memo-item{display:grid;grid-template-columns:22px 1fr auto;gap:6px;align-items:start}
+.memo-chk{padding-top:6px;cursor:pointer}
+.memo-chk input{width:16px;height:16px;accent-color:var(--ame);cursor:pointer}
+.memo-in{width:100%;border:1px solid transparent;background:transparent;border-radius:6px;padding:4px 6px;resize:none;min-height:30px;line-height:1.5;font-size:14px}
+.memo-in:hover{border-color:color-mix(in srgb,var(--ink3) 40%,transparent)}
+.memo-in:focus{border-color:var(--ame);background:#fff;outline:none}
+.memo-item.done .memo-in{text-decoration:line-through;color:var(--ink3)}
+.memo-del{opacity:0;margin-top:2px}
+.memo-item:hover .memo-del,.memo-item:focus-within .memo-del{opacity:1}
+.memo-empty{color:var(--ink3);font-size:13px;padding:4px 2px}
+.memo-new{width:100%;border:1px dashed color-mix(in srgb,var(--ink3) 50%,transparent);background:rgba(255,255,255,.6);border-radius:6px;padding:6px 8px;font-size:13.5px}
+.memo-new:focus{border-style:solid;border-color:var(--ame);background:#fff;outline:none}
+.memo-blk .memo-list{margin-bottom:8px}
+.memo-blk .ph-h .grow{flex:1}
+.memo-group{margin-bottom:8px}
+.memo-gh{font-size:13px;font-weight:700;color:var(--ink2);border-left:4px solid var(--c);padding-left:8px;margin:4px 0}
+.memo-addrow{display:grid;grid-template-columns:200px 1fr;gap:8px;margin-top:6px}
+.memo-addrow select{padding:6px 8px;font-size:13px}
+.memo-lock{display:flex;align-items:center;gap:12px;color:var(--ink2);font-size:14px;padding:4px 0}
+.memo-reset{grid-column:1/-1;font-size:12px;color:var(--ink2);display:flex;gap:8px;align-items:center}
+.btn.primary-soft{background:var(--ame-tint);border-color:var(--ame-soft);color:var(--ame-deep)}
+@media (max-width:720px){.memo-addrow{grid-template-columns:1fr}.memo-del{opacity:1}}
