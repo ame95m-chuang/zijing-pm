@@ -20,7 +20,7 @@ const STATUS = [
 ];
 const ST = Object.fromEntries(STATUS.map(s => [s.v, s]));
 const PALETTE = ['#46607A', '#2E7D8C', '#C0582B', '#3B7A3E', '#A63D6B', '#35609C', '#8C6D1F', '#1F7A6E', '#7A3FA0', '#B0402F', '#4F5D75', '#6B4E3D'];
-const HOURS = [['ot', '加班'], ['comp', '補休'], ['personal', '事假'], ['sick', '病假'], ['annual', '特休']];
+const HOURS = [['ot', '加班'], ['comp', '補休'], ['personal', '事假'], ['sick', '病假'], ['annual', '特休'], ['out', '外出']];
 const SIDE_NAME = { ours: '紫晶進度', client: '單位進度' };
 
 const DEFAULT_HOLIDAYS = `# 格式：日期 名稱（一行一筆）。名稱含「補班」代表該日要上班。
@@ -69,7 +69,7 @@ function defaultConfig() {
     holidays: DEFAULT_HOLIDAYS,
   };
 }
-function emptyStaff() { return { projects: [], milestones: [], logs: {}, deleted: {}, links: [], memos: [] }; }
+function emptyStaff() { return { projects: [], milestones: [], logs: {}, deleted: {}, links: [], memos: [], requests: [] }; }
 
 /* ---------------- small utilities ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -101,7 +101,7 @@ const S = {
   docs: {},              // sid -> {rev, data}
   fetchedAt: {},
   route: {},
-  ui: { showClosed: false, filters: {}, memoCards: {}, ptMs: (() => { try { return localStorage.getItem('zjpm.ptms') !== '0'; } catch (e) { return true; } })(), showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
+  ui: { showClosed: false, filters: {}, memoCards: {}, listSel: { pid: '', ids: new Set() }, leaveSid: (() => { try { return localStorage.getItem('zjpm.leaveSid') || ''; } catch (e) { return ''; } })(), ptMs: (() => { try { return localStorage.getItem('zjpm.ptms') !== '0'; } catch (e) { return true; } })(), showNotes: (() => { try { return localStorage.getItem('zjpm.notes') !== '0'; } catch (e) { return true; } })(), listAll: (() => { try { return localStorage.getItem('zjpm.listAll') === '1'; } catch (e) { return false; } })() },
   unlocked: JSON.parse(sessionStorage.getItem('zjpm.unlock') || '{}'),
 };
 const CFG = () => S.config.data;
@@ -253,6 +253,7 @@ function normalizeStaff(x) {
   out.deleted = d.deleted && typeof d.deleted === 'object' && !Array.isArray(d.deleted) ? d.deleted : {};
   out.links = Array.isArray(d.links) ? d.links.filter(l => l && l.id && l.sid && l.pid) : [];
   out.memos = Array.isArray(d.memos) ? d.memos.filter(m => m && m.id) : [];
+  out.requests = Array.isArray(d.requests) ? d.requests.filter(r => r && r.id) : [];
   Object.keys(out.logs).forEach(k => {
     const L = out.logs[k];
     if (!L || typeof L !== 'object') { delete out.logs[k]; return; }
@@ -277,6 +278,7 @@ function mergeStaff(a, b) {
   out.milestones = mergeArr(a.milestones, b.milestones);
   out.links = mergeArr(a.links || [], b.links || []);
   out.memos = mergeArr(a.memos || [], b.memos || []);
+  out.requests = mergeArr(a.requests || [], b.requests || []);
   // 同一格出現兩筆時合併文字
   const seen = {};
   out.milestones = out.milestones.filter(m => {
@@ -655,6 +657,7 @@ function route(parts, q) {
   const [a, b, c, d] = parts;
   if (!a) { document.title = CFG().company + '｜專案管理'; return viewHome(); }
   if (a === 'timeline') return viewProjects(false, Object.assign({}, q, { view: 'timeline' }));
+  if (a === 'leave') return viewLeave(b, q);
   if (a === 'projects') return b && c ? viewCaseProject(false, b, c, q) : viewProjects(false, q);
   if (a === 'settings') { if (!bossOk()) return viewGate('boss', '#/settings'); document.title = '系統設定｜' + CFG().company; return viewSettings(); }
   if (a === 's') {
@@ -674,6 +677,7 @@ function route(parts, q) {
     if (b === 'projects') return c && d ? viewCaseProject(true, c, d, q) : viewProjects(true, q);
     if (b === 'attendance') return viewBossAttendance(q);
     if (b === 'schedule') return viewBossSchedule(q);
+    if (b === 'leave') return viewBossLeave(q);
     if (b && staffOf(b) && S.docs[b]) return viewBossStaff(b, c || 'log', d, q);
     return viewBossBoard(q);
   }
@@ -701,7 +705,10 @@ function topbar(ctx) {
         <a class="${ctx.tab === 'schedule' ? 'on' : ''}" href="#/boss/schedule">工作期程表</a>
         <a class="${ctx.tab === 'projects' ? 'on' : ''}" href="#/boss/projects">專案總覽</a>
         <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
+        <a class="${ctx.tab === 'leave' ? 'on' : ''}" href="#/boss/leave">請假加班${(() => { const n = pendingCount(); return n ? `<span class="newbadge">${n}</span>` : ''; })()}</a>
       </nav>`;
+  } else if (ctx.mode === 'leave') {
+    mid = `<div class="who">請假加班</div>`;
   } else if (ctx.mode === 'projects') {
     mid = `<div class="who">專案總覽</div>`;
   } else if (ctx.mode === 'settings') {
@@ -755,8 +762,9 @@ function viewHome() {
   return topbar({}) + `<main class="home">
     <div class="home-cal">${tearOff(t)}
       <nav class="home-nav" aria-label="其他功能">
-        <a class="btn" href="#/boss">主管檢視</a>
         <a class="btn" href="#/projects">專案總覽</a>
+        ${(() => { const n = pendingCount(); return `<a class="btn ${n ? 'has-new' : ''}" href="#/leave">請假加班${n ? `<span class="newbadge">新申請 ${n}</span>` : ''}</a>`; })()}
+        <a class="btn" href="#/boss">主管檢視</a>
         <a class="btn" href="#/settings">系統設定</a>
       </nav>
       <p class="home-range">可填寫期間<br>${esc(RANGE().start.replace(/-/g, '/'))} 至 ${esc(RANGE().end.replace(/-/g, '/'))}</p>
@@ -1009,15 +1017,52 @@ function projectHTML(sid, p, q) {
 function listModeHTML(sid, p, ms, seg) {
   const t = todayStr();
   const list = ms.slice().sort((a, b) => a.date.localeCompare(b.date) || (a.side === 'ours' ? -1 : 1));
-  const rows = list.map(m => `<tr class="${m.date < t ? 'past' : ''}">
+  if (S.ui.listSel.pid !== p.id) S.ui.listSel = { pid: p.id, ids: new Set() };
+  const sel = S.ui.listSel.ids;
+  list.length && Array.from(sel).forEach(id => { if (!list.some(m => m.id === id)) sel.delete(id); });
+  const allOn = list.length && list.every(m => sel.has(m.id));
+  const rows = list.map(m => `<tr class="${m.date < t ? 'past' : ''} ${sel.has(m.id) ? 'sel' : ''}">
     <td class="nowrap">${mdw(m.date)}${m.date.slice(0, 4) !== t.slice(0, 4) ? `<br><small class="muted">${m.date.slice(0, 4)}</small>` : ''}</td>
     <td class="nowrap">${m.side === 'ours' ? '紫晶進度' : '<span class="tag client">單位進度</span>'}</td>
     <td style="white-space:pre-wrap">${esc(m.text.trim())}${m.note ? `<div class="small muted">${esc(m.note)}</div>` : ''}</td>
     <td class="nowrap">${m.endDate ? '至 ' + mdw(m.endDate) : ''}${m.tentative ? ' <span class="tag tent">待確認</span>' : ''}</td>
-    <td class="nowrap noprint"><button class="btn sm" data-act="msEdit" data-mid="${m.id}">編輯</button></td></tr>`).join('');
-  return `<div class="toolbar">${seg}<span class="grow"></span><button class="btn primary sm noprint" data-act="msNew" data-pid="${p.id}">＋ 新增期程</button><button class="btn sm noprint" data-act="print">列印</button></div>
-    ${list.length ? `<div class="grid-wrap"><table class="plain"><thead><tr><th>日期</th><th>類別</th><th>內容</th><th>期間／標記</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>`
+    <td class="nowrap noprint ms-act"><label class="ms-chk"><input type="checkbox" data-ch="msSel" data-mid="${m.id}" ${sel.has(m.id) ? 'checked' : ''} aria-label="選取這筆期程"></label><button class="btn sm" data-act="msEdit" data-mid="${m.id}">編輯</button></td></tr>`).join('');
+  const n = sel.size;
+  return `<div class="toolbar">${seg}<span class="grow"></span>
+      <span class="bulk noprint ${n ? 'on' : ''}"><span class="bulk-n">${n ? `已選 <b>${n}</b> 筆` : '勾選期程可批次處理'}</span>
+        <button class="btn sm danger" data-act="msBulkDel" ${n ? '' : 'disabled'}>全部刪除</button><button class="btn sm" data-act="msBulkShift" ${n ? '' : 'disabled'}>全部延後</button></span>
+      <button class="btn primary sm noprint" data-act="msNew" data-pid="${p.id}">＋ 新增期程</button><button class="btn sm noprint" data-act="print">列印</button></div>
+    ${list.length ? `<div class="grid-wrap"><table class="plain ms-list"><thead><tr><th>日期</th><th>類別</th><th>內容</th><th>期間／標記</th><th class="noprint ms-act"><label class="ms-chk" title="全選"><input type="checkbox" data-ch="msSelAll" ${allOn ? 'checked' : ''} aria-label="全選"></label>全選</th></tr></thead><tbody>${rows}</tbody></table></div>`
       : `<div class="empty"><h3>這個專案還沒有期程</h3><p>可以切換到「逐日填寫」直接在日期旁輸入，或按「新增期程」。</p></div>`}`;
+}
+/** 往後推 n 個工作天（跳過週末與國定假日，補班日算工作天） */
+function addWorkdays(d, n) { let x = d, c = 0, g = 0; while (c < n && g++ < 2000) { x = addDays(x, 1); if (!isOff(x)) c++; } return x; }
+function shiftDialog(sid, pid) {
+  const doc = D(sid), ids = Array.from(S.ui.listSel.ids);
+  const ms = doc.milestones.filter(m => ids.includes(m.id)).sort((a, b) => a.date.localeCompare(b.date));
+  if (!ms.length) return;
+  const calc = (d, n, unit) => unit === 'work' ? addWorkdays(d, n) : addDays(d, n);
+  const preview = bg => {
+    const n = Math.max(0, Math.floor(num(bg.querySelector('[name=n]').value))), unit = bg.querySelector('[name=unit]:checked').value;
+    const R = RANGE();
+    bg.querySelector('.shift-prev').innerHTML = n ? `<table class="plain"><thead><tr><th>期程</th><th>原日期</th><th></th><th>新日期</th></tr></thead><tbody>${ms.slice(0, 8).map(m => { const nd = calc(m.date, n, unit); return `<tr><td>${esc(m.text.trim().split('\n')[0])}</td><td class="nowrap">${mdw(m.date)}</td><td>→</td><td class="nowrap"><b>${mdw(nd)}</b>${nd > R.end ? ' <span class="tag tent">超出可填寫期間</span>' : ''}</td></tr>`; }).join('')}</tbody></table>${ms.length > 8 ? `<p class="muted small">…共 ${ms.length} 筆</p>` : ''}` : '<p class="muted small">請輸入要延後的天數。</p>';
+  };
+  openModal({
+    title: `全部延後（${ms.length} 筆）`,
+    body: `<div class="row" style="align-items:flex-end;gap:16px">
+        <label class="field" style="width:120px"><span>延後</span><input type="number" name="n" min="1" max="365" step="1" value="1"></label>
+        <label class="radio"><input type="radio" name="unit" value="work" checked> 工作天<small>（跳過週末與國定假日，補班日算工作天）</small></label>
+        <label class="radio"><input type="radio" name="unit" value="cal"> 日曆天</label></div>
+      <div class="shift-prev" style="margin-top:12px"></div>`,
+    actions: [{ label: '取消', cancel: true }, { label: '確認延後', cls: 'primary', primary: true, onClick: bg => {
+      const n = Math.floor(num(bg.querySelector('[name=n]').value)), unit = bg.querySelector('[name=unit]:checked').value;
+      if (!(n >= 1)) { toast('請輸入 1 以上的天數', true); return false; }
+      ms.forEach(m => { m.date = calc(m.date, n, unit); if (m.endDate) m.endDate = calc(m.endDate, n, unit); m.u = now(); });
+      touchStaff(sid); S.ui.listSel.ids = new Set();
+      toast(`已將 ${ms.length} 筆期程延後 ${n} 個${unit === 'work' ? '工作天' : '日曆天'}`); render({ keepScroll: true });
+    } }],
+    onOpen: bg => { preview(bg); bg.querySelectorAll('[name=n],[name=unit]').forEach(e => e.addEventListener('input', () => preview(bg))); bg.querySelectorAll('[name=unit]').forEach(e => e.addEventListener('change', () => preview(bg))); },
+  });
 }
 
 /* ---------- project dialog ---------- */
@@ -1388,9 +1433,9 @@ function dayHTML(sid, date, readOnly) {
   }).join('');
 
   const carry = readOnly ? null : carryCandidates(doc, date);
-  const hours = HOURS.map(([k, n]) => readOnly
-    ? (num(L.hours[k]) ? `<span class="tag">${n} ${num(L.hours[k])} 小時</span> ` : '')
-    : `<label>${n}<input type="number" min="0" max="24" step="0.5" inputmode="decimal" data-in="hours" data-k="${k}" value="${L.hours[k] != null && L.hours[k] !== '' ? esc(L.hours[k]) : ''}" placeholder="0"></label>`).join('');
+  // 出勤時數：由「請假加班」中主管同意的申請自動帶入，這裡只能檢視
+  const hours = HOURS.map(([k, n]) => (num(L.hours[k]) ? `<span class="tag hrs ${k}">${n} ${num(L.hours[k])} 小時</span> ` : '')).join('');
+  const pendHere = requestsOf(sid).filter(r => r.status === 'pending' && reqDates(r).includes(date));
   const boss = L.boss || null;
 
   const side = `<aside class="log-side">${tearOff(date, readOnly ? '' : (isOff(date) ? '今天是休假日' : ''))}${progressBox(c)}
@@ -1409,8 +1454,8 @@ function dayHTML(sid, date, readOnly) {
       ${readOnly ? '' : (projects.length ? `<div class="add-row noprint"><button class="btn" data-act="addNote">＋ 新增紀事</button></div>` : '<p class="muted small" style="margin:0">建立或加入專案後，就可以記錄專案紀事。</p>')}
     </section>
     ${readOnly ? '' : memoLogBlock(sid)}
-    <section class="blk" aria-labelledby="h-hours"><div class="blk-h"><h3 id="h-hours">出勤時數</h3><span class="sub">單位：小時，沒有就留空</span></div>
-      ${readOnly ? (hours.trim() || '<span class="muted small">無</span>') : `<div class="hours">${hours}</div>`}</section>
+    <section class="blk" aria-labelledby="h-hours"><div class="blk-h"><h3 id="h-hours">出勤時數</h3><span class="sub">由「請假加班」主管同意後自動帶入${readOnly ? '' : `・<a href="#/leave/${sid}">申請請假加班 ›</a>`}</span></div>
+      <div class="hours-ro">${hours.trim() || '<span class="muted small">無</span>'}${pendHere.map(r => `<span class="tag hrs-pend">待審核：${REQ_NAME[r.type]} ${num(r.hours)} 小時</span>`).join('')}</div></section>
     <section class="blk" aria-labelledby="h-rem"><div class="blk-h"><h3 id="h-rem">外包／其他備註</h3></div>
       ${readOnly ? (L.remark ? `<div class="readonly-text">${esc(L.remark)}</div>` : '<span class="muted small">無</span>')
         : `<textarea class="remark" data-auto data-in="remark" placeholder="外包進度、廠商聯絡、其他需要記錄的事">${esc(L.remark || '')}</textarea>`}</section>
@@ -1855,7 +1900,7 @@ function projectHomeHTML(ownerSid, p, opt = {}) {
 function projTabs(sid, p, tab) {
   const base = `#/s/${sid}/plan/p/${p.id}`;
   const tabs = p.link ? [['home', '首頁', base], ['list', '期程清單', base + '?mode=list']]
-    : [['home', '首頁', base], ['grid', '逐日填寫', base + '?tab=grid'], ['list', '期程清單', base + '?mode=list']];
+    : [['home', '首頁', base], ['list', '期程清單', base + '?mode=list'], ['grid', '逐日填寫', base + '?tab=grid']];
   return `<nav class="ptabs noprint" aria-label="專案分頁">${tabs.map(([k, n, h]) => `<a class="${tab === k ? 'on' : ''}" href="${h}">${n}</a>`).join('')}</nav>`;
 }
 
@@ -1975,7 +2020,7 @@ document.addEventListener('keydown', e => {
  *  - 確認調整期程：把有變動的項目寫回同仁的工作日誌，並以「主管調整」顏色標示
  * ===================================================================== */
 const SCHED_DAYS = 14;
-const LEAVE_NAME = { annual: '特休', personal: '事假', sick: '病假', comp: '補休' };
+const LEAVE_NAME = { annual: '特休', personal: '事假', sick: '病假', comp: '補休', out: '外出' };
 const BOSS_KIND = { add: '主管新增', edit: '主管修改', move: '主管調整', out: '主管改期', remove: '主管取消' };
 
 function schedDates(start) { const a = []; for (let i = 0; i < SCHED_DAYS; i++) a.push(addDays(start, i)); return a; }
@@ -2498,6 +2543,131 @@ function memoFind(sid, el) {
 }
 
 /* =====================================================================
+ * 請假加班：同仁填寫申請 → 主管同意 → 時數自動寫入工作日誌的出勤時數與出缺勤月報
+ * 資料：同仁資料檔 doc.requests = [{ id, type, date, endDate, hours, reason, status, at, u, decidedAt, bossNote }]
+ *       status：pending 待審核／approved 已同意／rejected 未同意／revoked 已撤銷
+ * 路由：#/leave（選人）、#/leave/:sid（同仁）、#/boss/leave（主管審核）
+ * ===================================================================== */
+const REQ_TYPES = HOURS;   // 加班、補休、事假、病假、特休、外出
+const REQ_NAME = Object.fromEntries(HOURS);
+const REQ_ST = { pending: ['待審核', 'pending'], approved: ['已同意', 'approved'], rejected: ['未同意', 'rejected'], revoked: ['已撤銷', 'revoked'] };
+
+const requestsOf = sid => (S.docs[sid] ? (D(sid).requests || []) : []).filter(r => r && r.id);
+/** 申請涵蓋的日期：只有單日就是那一天；有結束日期時只算工作天 */
+function reqDates(r) {
+  if (!r.endDate || r.endDate <= r.date) return [r.date];
+  const out = []; let g = 0;
+  for (let d = r.date; d <= r.endDate && g++ < 120; d = addDays(d, 1)) if (!isOff(d)) out.push(d);
+  return out.length ? out : [r.date];
+}
+const reqTotal = r => num(r.hours) * reqDates(r).length;
+function pendingCount() { return CFG().staff.reduce((n, s) => n + requestsOf(s.id).filter(r => r.status === 'pending').length, 0); }
+/** 依「已同意」的申請，重新計算某天某類別的出勤時數 */
+function recalcHours(sid, date, type) {
+  const sum = requestsOf(sid).filter(r => r.status === 'approved' && r.type === type && reqDates(r).includes(date)).reduce((n, r) => n + num(r.hours), 0);
+  const L = getLog(D(sid), date, true);
+  L.hours = L.hours || {};
+  L.hours[type] = sum ? String(Math.round(sum * 100) / 100) : '';
+  staffTouchLog(L);
+}
+const reqRange = r => r.endDate && r.endDate > r.date ? `${mdw(r.date)}–${mdw(r.endDate)}（${reqDates(r).length} 個工作天）` : mdw(r.date);
+const reqBadge = r => { const s = REQ_ST[r.status] || REQ_ST.pending; return `<span class="rq-st ${s[1]}">${s[0]}</span>`; };
+
+/* ---------------- 同仁：我的申請 ---------------- */
+function viewLeave(sid, q) {
+  if (!sid || !staffOf(sid) || !S.docs[sid]) {
+    const last = S.ui.leaveSid && staffOf(S.ui.leaveSid) ? S.ui.leaveSid : '';
+    if (last && !q.pick) { go('#/leave/' + last, true); return null; }
+    return topbar({ mode: 'leave' }) + `<main><div class="page-head"><div><h1>請假加班</h1><p>選擇自己的名字，填寫加班、補休、事假、病假、特休或外出申請。主管同意後，時數會自動寫入工作日誌與出缺勤月報。</p></div></div>
+      <div class="leave-who">${CFG().staff.map(s => { const n = requestsOf(s.id).filter(r => r.status === 'pending').length; return `<a class="btn" href="#/leave/${s.id}"><span class="dot" style="--c:${esc(s.color)}"></span>${esc(s.name)}${n ? `<span class="newbadge">${n} 待審核</span>` : ''}</a>`; }).join('')}</div>
+      ${pendingCount() ? `<p class="muted small" style="margin-top:18px">主管請到「主管檢視 → 請假加班」審核。</p>` : ''}</main>`;
+  }
+  const st = staffOf(sid);
+  if (st.pin && !S.unlocked[sid]) return viewGate(sid, location.hash);
+  S.ui.leaveSid = sid; try { localStorage.setItem('zjpm.leaveSid', sid); } catch (e) {}
+  const list = requestsOf(sid).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
+  const month = todayStr().slice(0, 7);
+  const sum = {}; list.filter(r => r.status === 'approved').forEach(r => reqDates(r).forEach(d => { if (d.slice(0, 7) === month) sum[r.type] = (sum[r.type] || 0) + num(r.hours); }));
+  const rows = list.map(r => `<tr class="${r.status}">
+    <td class="nowrap"><b class="rq-type ${r.type}">${REQ_NAME[r.type] || r.type}</b></td>
+    <td>${reqRange(r)}</td><td class="nowrap num">${fmtH(num(r.hours))} 小時${reqDates(r).length > 1 ? `<div class="small muted">共 ${fmtH(reqTotal(r))} 小時</div>` : ''}</td>
+    <td>${esc(r.reason || '')}${r.bossNote ? `<div class="small rq-note">主管：${esc(r.bossNote)}</div>` : ''}</td>
+    <td class="nowrap">${reqBadge(r)}<div class="small muted">${new Date(r.at).getMonth() + 1}/${new Date(r.at).getDate()} 申請</div></td>
+    <td class="nowrap noprint">${r.status === 'pending' ? `<button class="btn sm" data-act="reqWithdraw" data-rid="${r.id}">撤回</button>` : ''}</td></tr>`).join('');
+  return topbar({ mode: 'leave' }) + `<main>
+    <div class="page-head"><div><h1>請假加班｜${esc(st.name)}</h1><p>主管同意後，時數會自動寫入工作日誌的出勤時數與主管的出缺勤月報。</p></div>
+      <div class="row noprint"><a class="btn" href="#/leave?pick=1">切換人員</a><button class="btn primary" data-act="reqNew" data-sid="${sid}">＋ 填寫申請</button></div></div>
+    <section class="rq-sum"><h2>${+month.slice(5)} 月已同意</h2>${REQ_TYPES.map(([k, n]) => `<span class="rq-chip ${k}">${n}<b>${sum[k] ? fmtH(sum[k]) : 0}</b>小時</span>`).join('')}</section>
+    ${list.length ? `<div class="grid-wrap"><table class="plain rq-table"><thead><tr><th>類別</th><th>日期</th><th>時數</th><th>申請理由</th><th>狀態</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty"><h3>還沒有申請紀錄</h3><p>按右上角「＋ 填寫申請」開始。</p></div>`}
+  </main>`;
+}
+
+function reqDialog(sid) {
+  const st = staffOf(sid), t = todayStr();
+  openModal({
+    title: `填寫申請｜${st.name}`,
+    body: `<div class="rq-types">${REQ_TYPES.map(([k, n], i) => `<label class="rq-opt ${k}"><input type="radio" name="type" value="${k}" ${i === 0 ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div>
+      <div class="row" style="align-items:flex-start">
+        <label class="field" style="flex:1"><span>日期</span><input type="date" name="date" value="${t}"></label>
+        <label class="field" style="flex:1"><span>結束日期（選填）</span><input type="date" name="end"><span class="hint">連續多天時填寫，只計算工作天</span></label>
+        <label class="field" style="width:130px"><span>時數（每天）</span><input type="number" name="hours" min="0.5" max="24" step="0.5" value="1"></label>
+      </div>
+      <label class="field"><span>申請理由</span><textarea name="reason" rows="3" placeholder="例如：配合印刷廠校色加班、家中有事請假"></textarea></label>`,
+    actions: [{ label: '取消', cancel: true }, { label: '送出申請', cls: 'primary', primary: true, onClick: bg => {
+      const f = n => bg.querySelector(`[name=${n}]`);
+      const type = bg.querySelector('[name=type]:checked').value, date = f('date').value, end = f('end').value, hours = num(f('hours').value), reason = f('reason').value.trim();
+      if (!isDate(date)) { toast('請選擇日期', true); return false; }
+      if (end && end < date) { toast('結束日期不能早於開始日期', true); return false; }
+      if (!(hours > 0) || hours > 24) { toast('時數請填 0.5～24', true); return false; }
+      if (!reason) { f('reason').focus(); toast('請填寫申請理由', true); return false; }
+      const doc = D(sid); doc.requests = doc.requests || [];
+      doc.requests.push({ id: uid(), type, date, endDate: end && end > date ? end : '', hours: String(hours), reason, status: 'pending', at: now(), u: now() });
+      touchStaff(sid); toast('已送出，等待主管同意'); render({ keepScroll: true });
+    } }],
+    onOpen: bg => {
+      // 請假類預設 8 小時、加班與外出預設 1 小時
+      bg.querySelectorAll('[name=type]').forEach(r => r.addEventListener('change', () => { bg.querySelector('[name=hours]').value = ['annual', 'personal', 'sick', 'comp'].includes(r.value) ? 8 : 1; }));
+    },
+  });
+}
+
+/* ---------------- 主管：審核 ---------------- */
+function viewBossLeave(q) {
+  const month = /^\d{4}-\d{2}$/.test(q.m || '') ? q.m : todayStr().slice(0, 7);
+  const all = CFG().staff.flatMap(st => requestsOf(st.id).map(r => ({ st, r })));
+  const pend = all.filter(x => x.r.status === 'pending').sort((a, b) => a.r.date.localeCompare(b.r.date));
+  const hist = all.filter(x => x.r.status !== 'pending' && (x.r.date.slice(0, 7) === month || (x.r.endDate || '').slice(0, 7) === month)).sort((a, b) => b.r.date.localeCompare(a.r.date));
+  const card = ({ st, r }) => `<article class="rq-card">
+    <header><span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span><b class="rq-type ${r.type}">${REQ_NAME[r.type]}</b><span class="grow"></span><span class="small muted">${new Date(r.at).getMonth() + 1}/${new Date(r.at).getDate()} ${hm(r.at)} 申請</span></header>
+    <div class="rq-when">${reqRange(r)}　<b>${fmtH(num(r.hours))} 小時</b>${reqDates(r).length > 1 ? `／天，共 ${fmtH(reqTotal(r))} 小時` : ''}</div>
+    <div class="rq-reason">${esc(r.reason || '')}</div>
+    <div class="row"><button class="btn primary" data-act="reqApprove" data-sid="${st.id}" data-rid="${r.id}">同意</button><button class="btn" data-act="reqReject" data-sid="${st.id}" data-rid="${r.id}">不同意</button></div>
+  </article>`;
+  const prevM = addMonths(month + '-01', -1).slice(0, 7), nextM = addMonths(month + '-01', 1).slice(0, 7);
+  const rows = hist.map(({ st, r }) => `<tr><td><span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span></td><td><b class="rq-type ${r.type}">${REQ_NAME[r.type]}</b></td>
+    <td>${reqRange(r)}</td><td class="nowrap">${fmtH(num(r.hours))} 小時</td><td>${esc(r.reason || '')}${r.bossNote ? `<div class="small rq-note">主管：${esc(r.bossNote)}</div>` : ''}</td><td class="nowrap">${reqBadge(r)}</td>
+    <td class="nowrap noprint">${r.status === 'approved' ? `<button class="btn sm" data-act="reqRevoke" data-sid="${st.id}" data-rid="${r.id}">撤銷同意</button>` : ''}</td></tr>`).join('');
+  return topbar({ mode: 'boss', tab: 'leave' }) + `<main>
+    <div class="page-head"><div><h1>請假加班審核</h1><p>同意後，時數會自動寫入同仁的工作日誌與出缺勤月報。</p></div></div>
+    <section class="rq-sec"><h2>待審核 <span class="newbadge ${pend.length ? '' : 'zero'}">${pend.length}</span></h2>
+      ${pend.length ? `<div class="rq-cards">${pend.map(card).join('')}</div>` : '<p class="muted">目前沒有待審核的申請。</p>'}</section>
+    <section class="rq-sec"><div class="row" style="align-items:center"><h2 style="margin:0">審核紀錄</h2><span class="grow"></span>
+      <a class="icon-btn" href="#/boss/leave?m=${prevM}" aria-label="上個月">‹</a><b>${month.slice(0, 4)} 年 ${+month.slice(5)} 月</b><a class="icon-btn" href="#/boss/leave?m=${nextM}" aria-label="下個月">›</a></div>
+      ${rows ? `<div class="grid-wrap" style="margin-top:10px"><table class="plain rq-table"><thead><tr><th>同仁</th><th>類別</th><th>日期</th><th>時數</th><th>理由</th><th>狀態</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">這個月沒有審核紀錄。</p>'}</section>
+  </main>`;
+}
+
+function reqFind(sid, rid) { return requestsOf(sid).find(r => r.id === rid) || null; }
+function reqDecide(sid, rid, status, note) {
+  const r = reqFind(sid, rid); if (!r) return;
+  const wasApproved = r.status === 'approved';
+  r.status = status; r.decidedAt = now(); r.u = now(); if (note != null) r.bossNote = note;
+  if (status === 'approved' || wasApproved) reqDates(r).forEach(d => recalcHours(sid, d, r.type));
+  touchStaff(sid);
+}
+
+/* =====================================================================
  * 匯入專案期程：① 專案匯入檔（JSON）② 直接貼上文字（逗號分隔或從 Excel 複製）
  * ===================================================================== */
 
@@ -2955,7 +3125,7 @@ function applyCalendars(doc, pid, cals) {
  * 路由：#/boss/attendance?m=YYYY-MM
  * 資料來源：各同仁工作日誌中的「出勤時數」
  * ===================================================================== */
-const HOUR_ABBR = { ot: '加', comp: '補', personal: '事', sick: '病', annual: '特' };
+const HOUR_ABBR = { ot: '加', comp: '補', personal: '事', sick: '病', annual: '特', out: '外' };
 
 /** 這天的日誌有沒有填寫任何內容 */
 function logFilled(L) {
@@ -3067,6 +3237,7 @@ function viewBossBoard(q) {
     <div class="page-head"><div><h1>全員總覽</h1><p>${mdw(date)}${HOL[date] ? '　' + esc(HOL[date].name) : ''}　各同仁的工作日誌與完成狀況</p></div>
       <div class="row noprint"><a class="icon-btn" href="#/boss?d=${addDays(date, -1)}" aria-label="前一天">‹</a><input type="date" value="${date}" data-ch="bossDate" aria-label="選擇日期"><a class="icon-btn" href="#/boss?d=${addDays(date, 1)}" aria-label="後一天">›</a>${date !== t ? `<a class="btn sm" href="#/boss">今天</a>` : ''}<button class="btn sm" data-act="print">列印</button></div></div>
     ${modeNotice()}
+    ${(() => { const n = pendingCount(); return n ? `<a class="notice warn-notice noprint" href="#/boss/leave">有 <b>${n}</b> 筆請假加班申請等待審核 ›</a>` : ''; })()}
     <div class="board">${cards}</div>
     <p class="muted small noprint" style="margin-top:18px">要看未來兩週每個人的工作安排與重要期程，請到上方的「工作期程表」。</p>
   </main>`;
@@ -3167,6 +3338,29 @@ const ACT = {
   editProject: el => projectDialog(ctxSid(), byId(D(ctxSid()).projects, el.dataset.pid)),
   linkProjects: () => linkDialog(ctxSid()),
   openSearch: () => openSearch(),
+  msBulkDel: async () => {
+    const sid = S.route.parts[1], doc = D(sid), ids = Array.from(S.ui.listSel.ids);
+    const ms = doc.milestones.filter(m => ids.includes(m.id)); if (!ms.length) return;
+    if (!(await confirmBox('全部刪除', `確定刪除選取的 ${ms.length} 筆期程？刪除後無法復原。`, '全部刪除', true))) return;
+    ms.forEach(m => delMilestone(doc, m)); touchStaff(sid); S.ui.listSel.ids = new Set();
+    toast(`已刪除 ${ms.length} 筆期程`); render({ keepScroll: true });
+  },
+  msBulkShift: () => shiftDialog(S.route.parts[1], S.route.parts[4]),
+  reqNew: el => reqDialog(el.dataset.sid),
+  reqWithdraw: async el => {
+    const sid = S.route.parts[1], r = reqFind(sid, el.dataset.rid); if (!r) return;
+    if (!(await confirmBox('撤回申請', `確定撤回這筆${REQ_NAME[r.type]}申請？`, '撤回', true))) return;
+    const doc = D(sid); doc.requests = doc.requests.filter(x => x.id !== r.id); doc.deleted[r.id] = now(); touchStaff(sid); render({ keepScroll: true });
+  },
+  reqApprove: el => { reqDecide(el.dataset.sid, el.dataset.rid, 'approved'); toast('已同意，時數已寫入工作日誌與出缺勤月報'); render({ keepScroll: true }); },
+  reqReject: el => {
+    openModal({ title: '不同意這筆申請', body: '<label class="field"><span>說明（選填，同仁會看到）</span><textarea name="note" rows="3"></textarea></label>',
+      actions: [{ label: '取消', cancel: true }, { label: '不同意', cls: 'danger', primary: true, onClick: bg => { reqDecide(el.dataset.sid, el.dataset.rid, 'rejected', bg.querySelector('[name=note]').value.trim()); toast('已標記為不同意'); render({ keepScroll: true }); } }] });
+  },
+  reqRevoke: async el => {
+    if (!(await confirmBox('撤銷同意', '撤銷後，這筆申請的時數會從工作日誌與出缺勤月報中移除。', '撤銷', true))) return;
+    reqDecide(el.dataset.sid, el.dataset.rid, 'revoked'); toast('已撤銷'); render({ keepScroll: true });
+  },
   memoReset: el => { harvestSettings(); const s = S.setDraft.staff[+el.dataset.i]; if (s) { s.memoPin = ''; toast(`已移除 ${s.name} 的備忘錄密碼，按「儲存設定」後生效`); } render({ keepScroll: true }); },
   memoDel: async el => {
     const sid = S.route.parts[1], m = memoFind(sid, el); if (!m) return;
@@ -3438,6 +3632,8 @@ const CH = {
   toggleClosed: el => { S.ui.showClosed = el.checked; render({ keepScroll: true }); },
   tlWho: el => tlGo({ who: el.value }),
   caseOwner: el => casesGo({ owner: el.value }),
+  msSel: el => { const s = S.ui.listSel.ids; if (el.checked) s.add(el.dataset.mid); else s.delete(el.dataset.mid); render({ keepScroll: true }); },
+  msSelAll: el => { const ids = Array.from(document.querySelectorAll('[data-ch=msSel]')).map(x => x.dataset.mid); S.ui.listSel.ids = el.checked ? new Set(ids) : new Set(); render({ keepScroll: true }); },
   memoDone: el => { const sid = S.route.parts[1], m = memoFind(sid, el); if (!m) return; m.done = el.checked; m.u = now(); touchStaff(sid); render({ keepScroll: true }); },
   memoShowDone: el => { const sid = S.route.parts[1]; go(`#/s/${sid}/memo${el.checked ? '?done=1' : ''}`); },
   ptProj: el => {

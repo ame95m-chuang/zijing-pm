@@ -942,3 +942,64 @@ main.wide{max-width:none}
 .sl-item b{margin-right:4px}
 .sl-item i{margin-left:0}
 .sl-item i::before{content:"｜";color:#C2CAD2;margin:0 3px 0 1px}
+
+/* ---------- 期程清單批次處理 ---------- */
+.bulk{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;border-radius:8px;background:var(--line2);font-size:13px;color:var(--ink2)}
+.bulk.on{background:var(--ame-tint);color:var(--ame-deep)}
+.bulk .btn[disabled]{opacity:.45;cursor:not-allowed}
+.ms-act{text-align:right}
+.ms-chk{display:inline-flex;align-items:center;gap:4px;margin-right:8px;cursor:pointer;font-weight:400;font-size:12px}
+.ms-chk input{width:17px;height:17px;accent-color:var(--ame);cursor:pointer}
+.ms-list tr.sel td{background:var(--ame-tint)}
+.shift-prev table{width:100%;font-size:13px}
+.radio{display:inline-flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;padding-bottom:8px}
+.radio small{color:var(--ink3);font-size:12px}
+
+/* ---------- 請假加班 ---------- */
+.newbadge{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;color:#fff;background:#D97706;border-radius:999px;padding:0 7px;line-height:1.6;vertical-align:1px}
+.newbadge.zero{background:var(--line);color:var(--ink2)}
+.home .btn.has-new,.home .btn.has-new:hover{background:#FFF4D6;border-color:#D97706;color:#7C3A00}
+.home .btn.has-new:hover{background:#D97706;color:#fff}
+.home .btn.has-new:hover .newbadge{background:#fff;color:#B45309}
+.tabs a .newbadge{margin-left:4px}
+.warn-notice{display:block;background:#FFF4D6;border:1px solid #F0C36D;color:#7C3A00;text-decoration:none;margin-bottom:14px}
+.warn-notice:hover{background:#FDE9B8}
+.leave-who{display:flex;flex-wrap:wrap;gap:10px}
+.leave-who .btn{padding:10px 16px;font-size:15px;display:inline-flex;align-items:center;gap:8px}
+.leave-who .dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
+.rq-sum{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:14px}
+.rq-sum h2{font-size:15px;margin:0 6px 0 0;color:var(--ink2)}
+.rq-chip{display:inline-flex;align-items:baseline;gap:4px;background:var(--sheet);border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:13px;color:var(--ink2)}
+.rq-chip b{font-size:16px;color:var(--ink)}
+.rq-type{font-size:13px;border-radius:4px;padding:1px 8px;white-space:nowrap}
+.rq-type.ot,.hb.ot{background:#DCE6F0;color:#2E4A66}
+.rq-type.comp{background:#DDEFEE;color:#1F5C5B}
+.rq-type.personal{background:#F6E7D2;color:#7A4A12}
+.rq-type.sick{background:#F5DCD9;color:#8A2F27}
+.rq-type.annual{background:#E2EEDC;color:#2F5A23}
+.rq-type.out,.hb.out{background:#E8E2F2;color:#4B3A6B}
+.rq-st{font-size:12px;font-weight:700;border-radius:999px;padding:1px 9px}
+.rq-st.pending{background:#FFF4D6;color:#B45309}
+.rq-st.approved{background:#E3F1EA;color:#2B6A50}
+.rq-st.rejected{background:#F5DCD9;color:#8A2F27}
+.rq-st.revoked{background:var(--line2);color:var(--ink3)}
+.rq-note{color:var(--ame-deep);margin-top:2px}
+.rq-table td{vertical-align:top}
+.rq-table tr.rejected td,.rq-table tr.revoked td{color:var(--ink3)}
+.rq-sec{margin-bottom:26px}
+.rq-sec h2{font-size:17px;margin:0 0 10px;display:flex;align-items:center;gap:6px}
+.rq-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.rq-card{background:var(--sheet);border:1px solid #F0C36D;border-left:5px solid #D97706;border-radius:10px;padding:12px 14px;display:grid;gap:8px}
+.rq-card header{display:flex;align-items:center;gap:8px}
+.rq-card .grow{flex:1}
+.rq-when{font-size:14px}
+.rq-reason{font-size:14px;color:var(--ink2);white-space:pre-wrap;background:var(--wk);border-radius:6px;padding:6px 8px}
+.rq-types{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.rq-opt{cursor:pointer}
+.rq-opt input{position:absolute;opacity:0;pointer-events:none}
+.rq-opt span{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:5px 14px;font-size:14px;background:var(--sheet)}
+.rq-opt input:checked+span{background:var(--ame);border-color:var(--ame);color:#fff}
+.rq-opt input:focus-visible+span{outline:2px solid var(--ame);outline-offset:2px}
+.hours-ro{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tag.hrs{font-size:13px;padding:2px 10px}
+.tag.hrs-pend{background:#FFF4D6;color:#B45309;border-color:#F0C36D;font-size:13px;padding:2px 10px}
