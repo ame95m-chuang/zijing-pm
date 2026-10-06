@@ -705,7 +705,6 @@ function topbar(ctx) {
         <a class="${ctx.tab === 'schedule' ? 'on' : ''}" href="#/boss/schedule">工作期程表</a>
         <a class="${ctx.tab === 'projects' ? 'on' : ''}" href="#/boss/projects">專案總覽</a>
         <a class="${ctx.tab === 'attendance' ? 'on' : ''}" href="#/boss/attendance">出缺勤</a>
-        <a class="${ctx.tab === 'leave' ? 'on' : ''}" href="#/boss/leave">請假加班${(() => { const n = pendingCount(); return n ? `<span class="newbadge">${n}</span>` : ''; })()}</a>
       </nav>`;
   } else if (ctx.mode === 'leave') {
     mid = `<div class="who">請假加班</div>`;
@@ -1049,10 +1048,12 @@ function shiftDialog(sid, pid) {
   };
   openModal({
     title: `全部延後（${ms.length} 筆）`,
-    body: `<div class="row" style="align-items:flex-end;gap:16px">
-        <label class="field" style="width:120px"><span>延後</span><input type="number" name="n" min="1" max="365" step="1" value="1"></label>
-        <label class="radio"><input type="radio" name="unit" value="work" checked> 工作天<small>（跳過週末與國定假日，補班日算工作天）</small></label>
-        <label class="radio"><input type="radio" name="unit" value="cal"> 日曆天</label></div>
+    body: `<div class="shift-form">
+        <label class="field shift-n"><span>延後</span><input type="number" name="n" min="1" max="365" step="1" value="1"></label>
+        <div class="shift-units" role="radiogroup" aria-label="計算方式">
+          <label class="radio"><input type="radio" name="unit" value="work" checked><span>工作天<small>跳過週末與國定假日，補班日算工作天</small></span></label>
+          <label class="radio"><input type="radio" name="unit" value="cal"><span>日曆天<small>連同週末與假日一起計算</small></span></label>
+        </div></div>
       <div class="shift-prev" style="margin-top:12px"></div>`,
     actions: [{ label: '取消', cancel: true }, { label: '確認延後', cls: 'primary', primary: true, onClick: bg => {
       const n = Math.floor(num(bg.querySelector('[name=n]').value)), unit = bg.querySelector('[name=unit]:checked').value;
@@ -1564,9 +1565,9 @@ function exportLogCSV(sid, date) {
 }
 function exportProjectCSV(sid, pid) {
   const doc = V(sid); const p = byId(doc.projects, pid);
-  const rows = [['日期', '星期', '節日', '類別', '內容', '結束日期', '待確認', '備註']];
+  const rows = [['日期', '星期', '節日', '類別', '內容', '結束日期', '待確認', '備註', '編號（請勿修改）']];
   doc.milestones.filter(m => m.projectId === pid && (m.text || '').trim()).sort((a, b) => a.date.localeCompare(b.date))
-    .forEach(m => rows.push([m.date.replace(/-/g, '/'), WEEK[dowOf(m.date)], HOL[m.date] ? HOL[m.date].name : '', SIDE_NAME[m.side], m.text.trim(), m.endDate ? m.endDate.replace(/-/g, '/') : '', m.tentative ? '是' : '', m.note || '']));
+    .forEach(m => rows.push([m.date.replace(/-/g, '/'), WEEK[dowOf(m.date)], HOL[m.date] ? HOL[m.date].name : '', SIDE_NAME[m.side], m.text.trim(), m.endDate ? m.endDate.replace(/-/g, '/') : '', m.tentative ? '是' : '', m.note || '', m.id]));
   download(`${CFG().company}_專案期程_${p.code || ''}${p.name}.csv`, csv(rows), 'text/csv');
 }
 
@@ -2576,11 +2577,17 @@ const reqBadge = r => { const s = REQ_ST[r.status] || REQ_ST.pending; return `<s
 /* ---------------- 同仁：我的申請 ---------------- */
 function viewLeave(sid, q) {
   if (!sid || !staffOf(sid) || !S.docs[sid]) {
-    const last = S.ui.leaveSid && staffOf(S.ui.leaveSid) ? S.ui.leaveSid : '';
-    if (last && !q.pick) { go('#/leave/' + last, true); return null; }
-    return topbar({ mode: 'leave' }) + `<main><div class="page-head"><div><h1>請假加班</h1><p>選擇自己的名字，填寫加班、補休、事假、病假、特休或外出申請。主管同意後，時數會自動寫入工作日誌與出缺勤月報。</p></div></div>
-      <div class="leave-who">${CFG().staff.map(s => { const n = requestsOf(s.id).filter(r => r.status === 'pending').length; return `<a class="btn" href="#/leave/${s.id}"><span class="dot" style="--c:${esc(s.color)}"></span>${esc(s.name)}${n ? `<span class="newbadge">${n} 待審核</span>` : ''}</a>`; }).join('')}</div>
-      ${pendingCount() ? `<p class="muted small" style="margin-top:18px">主管請到「主管檢視 → 請假加班」審核。</p>` : ''}</main>`;
+    const pend = pendingCount();
+    // 網址固定帶上分頁，審核完最後一筆時也會停留在「主管審核」
+    if (q.tab !== 'review' && q.tab !== 'apply') { go('#/leave?tab=' + (pend ? 'review' : 'apply') + (q.m ? '&m=' + q.m : ''), true); return null; }
+    const tab = q.tab;
+    if (tab === 'review' && CFG().bossPin && !S.unlocked.__boss) return viewGate('boss', location.hash);
+    const seg = `<div class="seg leave-tabs" role="tablist"><a role="tab" class="${tab === 'review' ? 'on' : ''}" href="#/leave?tab=review">主管審核${pend ? `<span class="newbadge">${pend}</span>` : ''}</a><a role="tab" class="${tab === 'apply' ? 'on' : ''}" href="#/leave?tab=apply">同仁申請</a></div>`;
+    const body = tab === 'review' ? leaveReviewHTML(q)
+      : `<p class="lead">選擇自己的名字，填寫加班、補休、事假、病假、特休或外出申請。</p>
+        <div class="leave-who">${CFG().staff.map(s => { const n = requestsOf(s.id).filter(r => r.status === 'pending').length; return `<a class="btn" href="#/leave/${s.id}"><span class="dot" style="--c:${esc(s.color)}"></span>${esc(s.name)}${n ? `<span class="newbadge">${n} 待審核</span>` : ''}</a>`; }).join('')}</div>`;
+    return topbar({ mode: 'leave' }) + `<main><div class="page-head"><div><h1>請假加班</h1><p>同仁填寫申請，主管在這裡審核。同意後，時數會自動寫入工作日誌與出缺勤月報。</p></div></div>
+      ${seg}${body}</main>`;
   }
   const st = staffOf(sid);
   if (st.pin && !S.unlocked[sid]) return viewGate(sid, location.hash);
@@ -2596,7 +2603,7 @@ function viewLeave(sid, q) {
     <td class="nowrap noprint">${r.status === 'pending' ? `<button class="btn sm" data-act="reqWithdraw" data-rid="${r.id}">撤回</button>` : ''}</td></tr>`).join('');
   return topbar({ mode: 'leave' }) + `<main>
     <div class="page-head"><div><h1>請假加班｜${esc(st.name)}</h1><p>主管同意後，時數會自動寫入工作日誌的出勤時數與主管的出缺勤月報。</p></div>
-      <div class="row noprint"><a class="btn" href="#/leave?pick=1">切換人員</a><button class="btn primary" data-act="reqNew" data-sid="${sid}">＋ 填寫申請</button></div></div>
+      <div class="row noprint"><a class="btn" href="#/leave?tab=apply">切換人員</a><button class="btn primary" data-act="reqNew" data-sid="${sid}">＋ 填寫申請</button></div></div>
     <section class="rq-sum"><h2>${+month.slice(5)} 月已同意</h2>${REQ_TYPES.map(([k, n]) => `<span class="rq-chip ${k}">${n}<b>${sum[k] ? fmtH(sum[k]) : 0}</b>小時</span>`).join('')}</section>
     ${list.length ? `<div class="grid-wrap"><table class="plain rq-table"><thead><tr><th>類別</th><th>日期</th><th>時數</th><th>申請理由</th><th>狀態</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>`
       : `<div class="empty"><h3>還沒有申請紀錄</h3><p>按右上角「＋ 填寫申請」開始。</p></div>`}
@@ -2632,8 +2639,8 @@ function reqDialog(sid) {
   });
 }
 
-/* ---------------- 主管：審核 ---------------- */
-function viewBossLeave(q) {
+/* ---------------- 主管審核（在「請假加班」頁中） ---------------- */
+function leaveReviewHTML(q) {
   const month = /^\d{4}-\d{2}$/.test(q.m || '') ? q.m : todayStr().slice(0, 7);
   const all = CFG().staff.flatMap(st => requestsOf(st.id).map(r => ({ st, r })));
   const pend = all.filter(x => x.r.status === 'pending').sort((a, b) => a.r.date.localeCompare(b.r.date));
@@ -2645,18 +2652,17 @@ function viewBossLeave(q) {
     <div class="row"><button class="btn primary" data-act="reqApprove" data-sid="${st.id}" data-rid="${r.id}">同意</button><button class="btn" data-act="reqReject" data-sid="${st.id}" data-rid="${r.id}">不同意</button></div>
   </article>`;
   const prevM = addMonths(month + '-01', -1).slice(0, 7), nextM = addMonths(month + '-01', 1).slice(0, 7);
-  const rows = hist.map(({ st, r }) => `<tr><td><span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span></td><td><b class="rq-type ${r.type}">${REQ_NAME[r.type]}</b></td>
+  const rows = hist.map(({ st, r }) => `<tr class="${r.status}"><td><span class="who-tag" style="--c:${esc(st.color)}">${esc(st.name)}</span></td><td><b class="rq-type ${r.type}">${REQ_NAME[r.type]}</b></td>
     <td>${reqRange(r)}</td><td class="nowrap">${fmtH(num(r.hours))} 小時</td><td>${esc(r.reason || '')}${r.bossNote ? `<div class="small rq-note">主管：${esc(r.bossNote)}</div>` : ''}</td><td class="nowrap">${reqBadge(r)}</td>
-    <td class="nowrap noprint">${r.status === 'approved' ? `<button class="btn sm" data-act="reqRevoke" data-sid="${st.id}" data-rid="${r.id}">撤銷同意</button>` : ''}</td></tr>`).join('');
-  return topbar({ mode: 'boss', tab: 'leave' }) + `<main>
-    <div class="page-head"><div><h1>請假加班審核</h1><p>同意後，時數會自動寫入同仁的工作日誌與出缺勤月報。</p></div></div>
-    <section class="rq-sec"><h2>待審核 <span class="newbadge ${pend.length ? '' : 'zero'}">${pend.length}</span></h2>
+    <td class="nowrap noprint">${r.status === 'approved' ? `<button class="btn sm" data-act="reqRevoke" data-sid="${st.id}" data-rid="${r.id}">撤銷同意</button>` : ''}<button class="btn sm danger" data-act="reqDelete" data-sid="${st.id}" data-rid="${r.id}">刪除</button></td></tr>`).join('');
+  return `<section class="rq-sec"><h2>待審核 <span class="newbadge ${pend.length ? '' : 'zero'}">${pend.length}</span></h2>
       ${pend.length ? `<div class="rq-cards">${pend.map(card).join('')}</div>` : '<p class="muted">目前沒有待審核的申請。</p>'}</section>
     <section class="rq-sec"><div class="row" style="align-items:center"><h2 style="margin:0">審核紀錄</h2><span class="grow"></span>
-      <a class="icon-btn" href="#/boss/leave?m=${prevM}" aria-label="上個月">‹</a><b>${month.slice(0, 4)} 年 ${+month.slice(5)} 月</b><a class="icon-btn" href="#/boss/leave?m=${nextM}" aria-label="下個月">›</a></div>
-      ${rows ? `<div class="grid-wrap" style="margin-top:10px"><table class="plain rq-table"><thead><tr><th>同仁</th><th>類別</th><th>日期</th><th>時數</th><th>理由</th><th>狀態</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">這個月沒有審核紀錄。</p>'}</section>
-  </main>`;
+      <a class="icon-btn" href="#/leave?tab=review&m=${prevM}" aria-label="上個月">‹</a><b>${month.slice(0, 4)} 年 ${+month.slice(5)} 月</b><a class="icon-btn" href="#/leave?tab=review&m=${nextM}" aria-label="下個月">›</a></div>
+      ${rows ? `<div class="grid-wrap" style="margin-top:10px"><table class="plain rq-table"><thead><tr><th>同仁</th><th>類別</th><th>日期</th><th>時數</th><th>理由</th><th>狀態</th><th class="noprint"></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">這個月沒有審核紀錄。</p>'}
+      <p class="muted small" style="margin-top:8px">「刪除」會移除這筆紀錄；已同意的申請刪除時，時數也會從工作日誌與出缺勤月報中扣除。</p></section>`;
 }
+function viewBossLeave(q) { go('#/leave?tab=review' + (q.m ? '&m=' + q.m : ''), true); return null; }
 
 function reqFind(sid, rid) { return requestsOf(sid).find(r => r.id === rid) || null; }
 function reqDecide(sid, rid, status, note) {
@@ -2664,6 +2670,14 @@ function reqDecide(sid, rid, status, note) {
   const wasApproved = r.status === 'approved';
   r.status = status; r.decidedAt = now(); r.u = now(); if (note != null) r.bossNote = note;
   if (status === 'approved' || wasApproved) reqDates(r).forEach(d => recalcHours(sid, d, r.type));
+  touchStaff(sid);
+}
+
+function reqDelete(sid, rid) {
+  const doc = D(sid), r = reqFind(sid, rid); if (!r) return;
+  const wasApproved = r.status === 'approved';
+  doc.requests = doc.requests.filter(x => x.id !== rid); doc.deleted[rid] = now();
+  if (wasApproved) reqDates(r).forEach(d => recalcHours(sid, d, r.type));
   touchStaff(sid);
 }
 
@@ -2748,7 +2762,7 @@ function parsePaste(text) {
 function importDialog(sid, presetPid) {
   const doc = D(sid);
   const own = sortedProjects(doc, true).filter(p => !p.link);
-  const st = { json: null, jsonName: '', cal: null, calName: '' };
+  const st = { json: null, jsonName: '', cal: null, calName: '', csv: null, csvName: '', csvDel: true };
   const usedColors = new Set(doc.projects.map(x => x.color));
   const folder = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h4.2l2 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
   const sel = presetPid && own.some(p => p.id === presetPid) ? presetPid : (own[0] ? own[0].id : '');
@@ -2764,7 +2778,7 @@ function importDialog(sid, presetPid) {
         <label class="field" style="width:120px"><span>簡稱（2～4 字）</span><input type="text" name="short" maxlength="4" placeholder="例如：土文館"></label>
       </div>
     </div>
-    <label class="imp-drop" id="imp-drop">${folder}<span>選擇檔案</span><small>Google 日曆匯出的 .zip／.ics（直接上傳，不用解壓縮），或專案匯入檔 .json</small><input type="file" accept=".zip,.ics,.json,application/zip,text/calendar,application/json" hidden></label>
+    <label class="imp-drop" id="imp-drop">${folder}<span>選擇檔案</span><small>從這裡匯出、修改過的期程 .csv；Google 日曆匯出的 .zip／.ics；或專案匯入檔 .json</small><input type="file" accept=".csv,.zip,.ics,.json,text/csv,application/zip,text/calendar,application/json" hidden></label>
     <div class="imp-or"><span>或貼上文字</span></div>
     <textarea class="imp-text" name="paste" rows="6" spellcheck="false" placeholder="日期, 紫晶, 業主&#10;10/01, 1校提供,&#10;10/05, , 回復校稿&#10;10/20, 2校提供, 回復2校修改&#10;&#10;也可以直接從 Excel 複製「日期／紫晶進度／單位進度」幾欄貼上"></textarea>
     <div class="imp-preview" id="imp-preview" aria-live="polite"></div>
@@ -2776,10 +2790,18 @@ function importDialog(sid, presetPid) {
   };
   const paint = bg => {
     const box = bg.querySelector('#imp-preview');
-    bg.querySelector('.imp').classList.toggle('filemode', !!(st.cal || st.json));  // 選了檔案就收起貼上文字區
+    bg.querySelector('.imp').classList.toggle('filemode', !!(st.cal || st.json || st.csv));  // 選了檔案就收起貼上文字區
     const isNew = (bg.querySelector('[name=tgt]:checked') || {}).value === 'new';
     bg.querySelector('.imp-new').classList.toggle('on', isNew);
     bg.querySelector('[name=pid]').disabled = isNew || !own.length;
+    if (st.csv) {
+      const { pid } = targetInfo(bg);
+      box.innerHTML = `<div class="imp-sum">已選擇 <b>${esc(st.csvName)}</b>：${st.csv.rows.length} 筆期程。${st.csv.hasId ? '依「編號」比對，修改過的會更新，不會重複。' : '檔案沒有「編號」欄，所有期程都會當成新增。'} <button type="button" class="link-btn" data-clear>改用貼上文字</button></div>${csvPreviewHTML(doc, pid, st.csv, st.csvDel)}`;
+      bg.querySelector('.imp-text').disabled = true;
+      box.querySelector('[data-clear]').onclick = () => { st.csv = null; bg.querySelector('.imp-text').disabled = false; paint(bg); };
+      const dc = box.querySelector('[data-csvdel]'); if (dc) dc.addEventListener('change', () => { st.csvDel = dc.checked; paint(bg); });
+      return;
+    }
     if (st.cal) {
       const { pid } = targetInfo(bg);
       box.innerHTML = `<div class="imp-sum">已選擇日曆檔 <b>${esc(st.calName)}</b>：${st.cal.length} 個日曆。重新上傳同一份日曆時，改過的行程會更新、刪掉的會移除，不會重複。 <button type="button" class="link-btn" data-clear>改用貼上文字</button></div>${calPreviewHTML(doc, pid, st.cal)}`;
@@ -2839,6 +2861,14 @@ function importDialog(sid, presetPid) {
   };
   const doImport = bg => {
     if (st.json) { importSeed(sid, st.json); render({ keepScroll: true }); return true; }
+    if (st.csv) {
+      const tgt = resolveTarget(bg); if (!tgt) return false;
+      const r = applyCSV(doc, tgt.pid, st.csv, st.csvDel);
+      touchStaff(sid);
+      toast(`已匯入到「${shortOf(tgt.p)}」：新增 ${r.add} 筆、更新 ${r.upd} 筆${r.del ? `、移除 ${r.del} 筆` : ''}`);
+      go(`#/s/${sid}/plan/p/${tgt.pid}?mode=list`);
+      return true;
+    }
     if (st.cal) {
       if (!st.cal.some(c => c.on)) { toast('請至少勾選一個日曆', true); return false; }
       const tgt = resolveTarget(bg); if (!tgt) return false;
@@ -2882,6 +2912,16 @@ function importDialog(sid, presetPid) {
       const file = bg.querySelector('#imp-drop input');
       file.addEventListener('change', async () => {
         const fl = file.files[0]; file.value = ''; if (!fl) return;
+        if (/\.(csv|txt)$/i.test(fl.name)) {
+          const C = parseMsCSV(await readTextSmart(fl));
+          if (!C) { toast('看不懂這個 CSV：第一行需要有「日期」與「內容」欄', true); return; }
+          st.csv = C; st.csvName = fl.name; st.json = null; st.cal = null;
+          // 依檔名自動選擇專案（匯出的檔名包含代號與專案名稱）
+          const hit = own.find(p => fl.name.includes((p.code || '') + p.name)) || own.find(p => p.name && fl.name.includes(p.name));
+          if (hit && !presetPid) { bg.querySelector('[name=tgt][value=exist]').checked = true; bg.querySelector('[name=pid]').value = hit.id; }
+          bg.querySelector('#imp-target').classList.remove('dim'); paint(bg);
+          return;
+        }
         if (/\.(zip|ics)$/i.test(fl.name)) {
           try { st.cal = await readCalendarFile(fl); st.calName = fl.name; st.json = null; bg.querySelector('#imp-target').classList.remove('dim'); paint(bg); }
           catch (e) { toast(e.message || '讀不到這個日曆檔', true); }
@@ -2895,6 +2935,76 @@ function importDialog(sid, presetPid) {
       paint(bg);
     },
   });
+}
+
+/* ---------------- 專案期程 CSV（匯出 → 修改 → 匯入） ---------------- */
+/** 讀取文字檔：先試 UTF-8，不是的話改用 Big5（Excel 另存「CSV（逗號分隔）」時的編碼） */
+async function readTextSmart(file) {
+  const buf = await file.arrayBuffer();
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf).replace(/^\ufeff/, ''); }
+  catch (e) { try { return new TextDecoder('big5').decode(buf); } catch (e2) { return new TextDecoder().decode(buf); } }
+}
+/** 解析系統匯出的期程 CSV；不是這個格式時回傳 null */
+function parseMsCSV(text) {
+  const t = String(text || '');
+  const delim = t.split('\n')[0].includes('\t') && !t.split('\n')[0].includes(',') ? '\t' : ',';
+  const table = splitTable(t, delim).filter(r => r.some(c => c));
+  if (!table.length) return null;
+  const head = table[0], col = re => head.findIndex(h => re.test(h));
+  const ci = { date: col(/日期/), side: col(/類別/), text: col(/內容/), end: col(/結束/), tent: col(/待確認/), note: col(/備註/), id: col(/編號/) };
+  if (ci.date < 0 || ci.text < 0) return null;
+  const R = RANGE();
+  const rows = table.slice(1).map((c, i) => {
+    const get = k => (ci[k] >= 0 && ci[k] < c.length ? c[ci[k]] : '').trim();
+    const text = get('text'); if (!text && !get('date')) return null;
+    const date = parseImportDate(get('date')), end = get('end') ? parseImportDate(get('end')) : '';
+    let err = '';
+    if (!text) err = '缺少內容';
+    else if (!date) err = `看不懂日期「${get('date')}」`;
+    else if (date < R.start || date > R.end) err = '超出可填寫期間';
+    else if (get('end') && !end) err = `看不懂結束日期「${get('end')}」`;
+    return { n: i + 2, id: get('id'), date, endDate: end && date && end > date ? end : '', side: /單位|業主|客戶/.test(get('side')) ? 'client' : 'ours',
+      text, tentative: /^(是|y|yes|v|✓|true|1)$/i.test(get('tent')), note: get('note'), err };
+  }).filter(Boolean);
+  return { rows, hasId: ci.id >= 0 };
+}
+/** 與目標專案比對：新增／更新／不變／刪除 */
+function csvPlan(doc, pid, C) {
+  const cur = pid ? doc.milestones.filter(m => m.projectId === pid && (m.text || '').trim()) : [];
+  const byIdMap = new Map(cur.map(m => [m.id, m]));
+  const seen = new Set();
+  const rows = C.rows.map(r => {
+    if (r.err) return { r, st: 'err' };
+    const ex = r.id ? byIdMap.get(r.id) : null;
+    if (ex) {
+      seen.add(ex.id);
+      const same = ex.date === r.date && (ex.endDate || '') === r.endDate && ex.side === r.side && ex.text.trim() === r.text && !!ex.tentative === r.tentative && (ex.note || '') === r.note;
+      return { r, ex, st: same ? 'same' : 'upd' };
+    }
+    return { r, st: 'add' };
+  });
+  const removed = C.hasId ? cur.filter(m => !seen.has(m.id)) : [];
+  return { rows, removed };
+}
+function csvPreviewHTML(doc, pid, C, delOn) {
+  const P = csvPlan(doc, pid, C);
+  const n = k => P.rows.filter(x => x.st === k).length;
+  const ST = { add: '新增', upd: '更新', same: '不變', err: '' };
+  const list = P.rows.filter(x => x.st !== 'same').slice(0, 300).map(x => `<tr class="${x.st === 'err' ? 'err' : ''}"><td class="nowrap">${x.r.date ? mdw(x.r.date) : '—'}${x.r.endDate ? '–' + md(x.r.endDate) : ''}</td><td>${x.r.side === 'client' ? '<span class="tag client">單位</span>' : ''}${esc(x.r.text)}${x.r.tentative ? '<span class="tag tent">待確認</span>' : ''}</td><td class="st">${x.st === 'err' ? `第 ${x.r.n} 行：${esc(x.r.err)}` : ST[x.st]}${x.st === 'upd' && x.ex.date !== x.r.date ? `<div class="small muted">原 ${mdw(x.ex.date)}</div>` : ''}</td></tr>`).join('')
+    + (delOn ? P.removed.map(m => `<tr class="del"><td class="nowrap">${mdw(m.date)}</td><td>${esc(m.text.trim())}</td><td class="st">檔案中已刪除，將移除</td></tr>`).join('') : '');
+  return `<div class="imp-sum">新增 <b>${n('add')}</b>、更新 <b>${n('upd')}</b>、不變 ${n('same')}${n('err') ? `、<span class="bad">有問題 ${n('err')} 行，不會匯入</span>` : ''}${delOn && P.removed.length ? `、<span class="bad">移除 ${P.removed.length}</span>` : ''}</div>
+    ${P.removed.length ? `<label class="chk" style="margin:4px 0 8px"><input type="checkbox" data-csvdel ${delOn ? 'checked' : ''}> 一併刪除檔案中已移除的 ${P.removed.length} 筆期程</label>` : ''}
+    ${list ? `<div class="imp-table"><table class="plain"><thead><tr><th>日期</th><th>期程內容</th><th>狀態</th></tr></thead><tbody>${list}</tbody></table></div>` : '<p class="muted small" style="margin:0">內容與系統相同，不需要更新。</p>'}`;
+}
+function applyCSV(doc, pid, C, delOn) {
+  const P = csvPlan(doc, pid, C); let add = 0, upd = 0, del = 0;
+  P.rows.forEach(x => {
+    const v = { date: x.r.date, endDate: x.r.endDate, side: x.r.side, text: x.r.text, tentative: x.r.tentative, note: x.r.note };
+    if (x.st === 'add') { doc.milestones.push(Object.assign({ id: uid(), projectId: pid, u: now() }, v)); add++; }
+    else if (x.st === 'upd') { Object.assign(x.ex, v, { u: now() }); upd++; }
+  });
+  if (delOn) P.removed.forEach(m => { delMilestone(doc, m); del++; });
+  return { add, upd, del };
 }
 
 /* =====================================================================
@@ -3237,7 +3347,7 @@ function viewBossBoard(q) {
     <div class="page-head"><div><h1>全員總覽</h1><p>${mdw(date)}${HOL[date] ? '　' + esc(HOL[date].name) : ''}　各同仁的工作日誌與完成狀況</p></div>
       <div class="row noprint"><a class="icon-btn" href="#/boss?d=${addDays(date, -1)}" aria-label="前一天">‹</a><input type="date" value="${date}" data-ch="bossDate" aria-label="選擇日期"><a class="icon-btn" href="#/boss?d=${addDays(date, 1)}" aria-label="後一天">›</a>${date !== t ? `<a class="btn sm" href="#/boss">今天</a>` : ''}<button class="btn sm" data-act="print">列印</button></div></div>
     ${modeNotice()}
-    ${(() => { const n = pendingCount(); return n ? `<a class="notice warn-notice noprint" href="#/boss/leave">有 <b>${n}</b> 筆請假加班申請等待審核 ›</a>` : ''; })()}
+    ${(() => { const n = pendingCount(); return n ? `<a class="notice warn-notice noprint" href="#/leave?tab=review">有 <b>${n}</b> 筆請假加班申請等待審核，前往「請假加班」審核 ›</a>` : ''; })()}
     <div class="board">${cards}</div>
     <p class="muted small noprint" style="margin-top:18px">要看未來兩週每個人的工作安排與重要期程，請到上方的「工作期程表」。</p>
   </main>`;
@@ -3356,6 +3466,11 @@ const ACT = {
   reqReject: el => {
     openModal({ title: '不同意這筆申請', body: '<label class="field"><span>說明（選填，同仁會看到）</span><textarea name="note" rows="3"></textarea></label>',
       actions: [{ label: '取消', cancel: true }, { label: '不同意', cls: 'danger', primary: true, onClick: bg => { reqDecide(el.dataset.sid, el.dataset.rid, 'rejected', bg.querySelector('[name=note]').value.trim()); toast('已標記為不同意'); render({ keepScroll: true }); } }] });
+  },
+  reqDelete: async el => {
+    const r = reqFind(el.dataset.sid, el.dataset.rid); if (!r) return;
+    if (!(await confirmBox('刪除紀錄', `確定刪除這筆${REQ_NAME[r.type]}紀錄？${r.status === 'approved' ? '\n這筆已同意，刪除後時數會從工作日誌與出缺勤月報中扣除。' : ''}`, '刪除', true))) return;
+    reqDelete(el.dataset.sid, el.dataset.rid); toast('已刪除'); render({ keepScroll: true });
   },
   reqRevoke: async el => {
     if (!(await confirmBox('撤銷同意', '撤銷後，這筆申請的時數會從工作日誌與出缺勤月報中移除。', '撤銷', true))) return;
